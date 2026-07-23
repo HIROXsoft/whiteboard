@@ -1,0 +1,568 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#eef3f6" />
+<title>デジタル スケジュールボード</title>
+<style>
+  :root{
+    --bg:#eaf0f3;
+    --board:#f8fbfc;
+    --line:#8d9aa1;
+    --line-strong:#45545c;
+    --ink:#101820;
+    --panel:#ffffffee;
+    --accent:#0f6cbd;
+    --shadow:0 8px 24px rgba(0,0,0,.12);
+    --row-h:76px;
+    --header-h:58px;
+    --name-magnet-w:clamp(82px,8vw,112px);
+    --name-magnet-h:50px;
+    --status-magnet-w:clamp(70px,6.5vw,92px);
+    --status-magnet-h:54px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;background:var(--bg);font-family:"Yu Gothic UI","Meiryo",system-ui,sans-serif;color:var(--ink);overflow:hidden}
+  button,input{font:inherit}
+  button{touch-action:manipulation}
+  #app{height:100%;display:flex;flex-direction:column;gap:8px;padding:8px}
+  .topbar{display:flex;align-items:center;gap:8px;background:var(--panel);border-radius:14px;padding:8px 10px;box-shadow:var(--shadow);z-index:30}
+  .title{font-size:clamp(20px,2.6vw,38px);font-weight:900;letter-spacing:.04em;white-space:nowrap}
+  .datebox{display:flex;align-items:center;gap:6px;margin-right:auto}
+  .datebox input{font-size:clamp(17px,2vw,28px);font-weight:800;border:1px solid #b7c3ca;border-radius:10px;padding:7px 9px;background:#fff}
+  .tool-group{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+  .btn{border:1px solid #aab6bd;background:#fff;border-radius:10px;padding:8px 11px;font-weight:800;box-shadow:0 2px 6px rgba(0,0,0,.08);cursor:pointer;min-height:42px}
+  .btn.active{background:#102a43;color:#fff;border-color:#102a43}
+  .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .btn.danger{background:#fff2f2;color:#9c1818;border-color:#e0abab}
+  .pen-size{display:flex;align-items:center;gap:4px;border:1px solid #b7c3ca;border-radius:10px;padding:4px 7px;background:#fff}
+  .pen-size input{width:80px}
+  .layout{min-height:0;flex:1;display:grid;grid-template-columns:minmax(170px,22vw) 1fr;gap:8px}
+  .tray{min-height:0;background:var(--panel);border-radius:14px;box-shadow:var(--shadow);display:flex;flex-direction:column;overflow:hidden}
+  .tray-head{padding:10px;border-bottom:1px solid #cbd5da;font-weight:900;font-size:18px}
+  .tray-actions{padding:8px;display:grid;grid-template-columns:1fr 1fr;gap:6px;border-bottom:1px solid #d5dde1}
+  .tray-list{min-height:0;overflow:auto;padding:8px;display:flex;flex-direction:column;gap:7px}
+  .person-card{display:grid;grid-template-columns:auto 1fr;gap:6px;align-items:center}
+  .name-chip,.status-chip{user-select:none;-webkit-user-select:none;touch-action:none;cursor:grab;border-radius:8px;font-weight:900;display:inline-flex;align-items:center;justify-content:center;box-shadow:0 3px 8px rgba(0,0,0,.18);border:1px solid rgba(0,0,0,.18)}
+  .name-chip{background:linear-gradient(#fff,#edf2f5);width:var(--name-magnet-w);height:var(--name-magnet-h);min-width:var(--name-magnet-w);min-height:var(--name-magnet-h);padding:7px 8px;font-size:clamp(17px,1.7vw,25px);letter-spacing:.08em;white-space:nowrap;flex:none}
+  .status-chip{width:var(--status-magnet-w);height:var(--status-magnet-h);min-width:var(--status-magnet-w);min-height:var(--status-magnet-h);padding:9px 8px;font-size:clamp(16px,1.5vw,22px);color:#111;font-weight:900;white-space:nowrap;flex:none}
+  .status-direct,.status-return{background:#8fc6ff}
+  .status-trip{background:#ffe26a}
+  .name-chip:hover,.status-chip:hover,.floating-chip:hover{filter:brightness(.98);box-shadow:0 6px 14px rgba(0,0,0,.22)}
+  .tiny{border:0;background:transparent;font-size:19px;padding:8px;cursor:pointer}
+  .magnet-box{padding:8px;border-top:1px solid #cbd5da;display:flex;flex-wrap:wrap;gap:7px;justify-content:center}
+  .board-wrap{min-width:0;min-height:0;background:var(--board);border-radius:14px;box-shadow:var(--shadow);overflow:auto;position:relative}
+  .board{min-width:760px;padding:10px 14px 18px}
+  .board-title{border-bottom:3px solid var(--line-strong);padding:4px 4px 8px;background:var(--board)}
+  .board-title .main{text-align:center;font-weight:950;font-size:clamp(24px,3vw,42px);letter-spacing:.06em}
+  .board-surface{position:relative}
+  .headers{display:grid;grid-template-columns:20% 1fr 18%;background:var(--board);border-bottom:2px solid var(--line-strong);font-size:clamp(16px,1.7vw,25px);font-weight:900;text-align:center;min-height:var(--header-h)}
+  .headers>div{padding:8px 4px;border-right:2px solid var(--line-strong);display:flex;align-items:center;justify-content:center}
+  .headers>div:last-child{border-right:0}
+  .rows{position:relative}
+  .row{display:grid;grid-template-columns:20% 1fr 18%;min-height:var(--row-h);border-bottom:1.5px solid var(--line);position:relative;background:#fbfdfe}
+  .cell{position:relative;border-right:2px solid var(--line-strong);min-height:var(--row-h)}
+  .cell:last-child{border-right:0}
+  .drawing-canvas{position:absolute;inset:0;width:100%;height:100%;z-index:6;touch-action:none;pointer-events:auto}
+  .floating-layer{position:absolute;inset:0;z-index:12;pointer-events:none}
+  .floating-chip{position:absolute;pointer-events:auto;touch-action:none;cursor:grab}
+  .ghost{position:fixed;z-index:9999;pointer-events:none;opacity:.9;transform:scale(1.06);box-shadow:0 10px 24px rgba(0,0,0,.28)}
+  .empty{color:#78868e;font-size:14px;padding:8px}
+  .modal{position:fixed;inset:0;background:#0d1b2a88;display:none;align-items:center;justify-content:center;z-index:100;padding:20px}
+  .modal.show{display:flex}
+  .dialog{width:min(560px,96vw);max-height:90vh;overflow:auto;background:#fff;border-radius:16px;box-shadow:0 20px 50px rgba(0,0,0,.3);padding:18px}
+  .dialog h2{margin:0 0 14px}
+  .field{display:flex;flex-direction:column;gap:5px;margin:10px 0}
+  .field input{font-size:20px;padding:10px;border:1px solid #adb9c0;border-radius:9px}
+  .dialog-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
+  .toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:#132f4c;color:#fff;padding:10px 16px;border-radius:999px;box-shadow:var(--shadow);z-index:200;opacity:0;pointer-events:none;transition:.2s}
+  .toast.show{opacity:1}
+  @media (max-width:900px){
+    .layout{grid-template-columns:150px 1fr}
+    .title{display:none}
+    .topbar{align-items:flex-start}
+    .tool-group{gap:4px}
+    .btn{padding:7px 8px}
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <div class="datebox"><input id="boardDate" type="date" aria-label="日付"></div>
+    <div class="title">SCHEDULE BOARD</div>
+    <div class="tool-group">
+      <button class="btn" id="eraseBtn">⌫ 消しゴムON/OFF</button>
+      <div class="pen-size" title="ペン太さ"><span>太さ</span><input id="penSize" type="range" min="2" max="18" value="5"></div>
+      <button class="btn" id="undoBtn">↶ 戻す</button>
+      <button class="btn danger" id="clearDayBtn">本日分を消去</button>
+      <button class="btn" id="backupBtn">保存</button>
+      <button class="btn" id="restoreBtn">読込</button>
+      <button class="btn primary" id="fullBtn">全画面</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="tray">
+      <div class="tray-head">氏名マグネット</div>
+      <div class="tray-actions">
+        <button class="btn" id="addPersonBtn">＋ 氏名追加</button>
+        <button class="btn" id="resetPeopleBtn">ボードから戻す</button>
+      </div>
+      <div id="peopleList" class="tray-list"></div>
+      <div class="magnet-box">
+        <div class="status-chip status-direct" data-type="status" data-value="直行">直行</div>
+        <div class="status-chip status-return" data-type="status" data-value="直帰">直帰</div>
+        <div class="status-chip status-trip" data-type="status" data-value="出張">出張</div>
+      </div>
+    </aside>
+
+    <section class="board-wrap">
+      <div class="board">
+        <div class="board-title"><div class="main">SCHEDULE BOARD</div></div>
+        <div id="boardSurface" class="board-surface">
+          <div class="headers"><div>氏 名</div><div>行 先</div><div>帰社時間</div></div>
+          <div id="rows" class="rows"></div>
+          <canvas id="drawingCanvas" class="drawing-canvas"></canvas>
+          <div id="floatingLayer" class="floating-layer"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="modal" id="personModal">
+  <div class="dialog">
+    <h2>氏名マグネットを追加</h2>
+    <div class="field"><label for="personName">表示名（2～3文字推奨）</label><input id="personName" maxlength="10" placeholder="例：田中"></div>
+    <div class="dialog-actions"><button class="btn" data-close>キャンセル</button><button class="btn primary" id="savePersonBtn">追加</button></div>
+  </div>
+</div>
+<input type="file" id="restoreFile" accept="application/json" hidden>
+<div class="toast" id="toast"></div>
+
+<script>
+(() => {
+  'use strict';
+  const ROW_COUNT = 16;
+  const KEY = 'hirox_schedule_board_v4';
+  const today = new Date();
+  const pad = n => String(n).padStart(2,'0');
+  const ymd = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  const defaultPeople = [];
+
+  const $ = s => document.querySelector(s);
+  const rowsEl = $('#rows');
+  const dateEl = $('#boardDate');
+  const peopleList = $('#peopleList');
+  const modal = $('#personModal');
+  const boardSurface = $('#boardSurface');
+  const drawingCanvas = $('#drawingCanvas');
+  const floatingLayer = $('#floatingLayer');
+  dateEl.value = ymd(today);
+
+  let state = loadState();
+  let mode = 'pen';
+  let drag = null;
+  let activeStroke = null;
+  let saveTimer;
+
+  function emptyDay(){
+    return { drawing:null, magnets:[] };
+  }
+  function loadState(){
+    try{
+      const v = JSON.parse(localStorage.getItem(KEY));
+      if(v && Array.isArray(v.people) && v.days) return v;
+    }catch(e){}
+    return { people: defaultPeople.map((name,i)=>({id:'p'+Date.now()+i,name})), days:{} };
+  }
+  function day(){
+    const k = dateEl.value || ymd(today);
+    if(!state.days[k]) state.days[k] = emptyDay();
+    if(!Array.isArray(state.days[k].magnets)) state.days[k].magnets = [];
+    if(!('drawing' in state.days[k])) state.days[k].drawing = null;
+    return state.days[k];
+  }
+  function saveSoon(){
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(()=>localStorage.setItem(KEY, JSON.stringify(state)), 120);
+  }
+  function toast(msg){
+    const t=$('#toast');
+    t.textContent=msg;
+    t.classList.add('show');
+    setTimeout(()=>t.classList.remove('show'),1500);
+  }
+  function placedPersonIds(){
+    return new Set(day().magnets.filter(m=>m.kind==='person').map(m=>m.personId));
+  }
+
+  function renderPeople(){
+    const placed = placedPersonIds();
+    peopleList.innerHTML='';
+    const free = state.people.filter(p=>!placed.has(p.id));
+    if(!free.length) peopleList.innerHTML='<div class="empty">氏名マグネットは未登録です。［＋ 氏名追加］から追加してください。</div>';
+    free.forEach(p=>{
+      const row=document.createElement('div');
+      row.className='person-card';
+      const chip=document.createElement('div');
+      chip.className='name-chip';
+      chip.textContent=p.name;
+      chip.dataset.type='person';
+      chip.dataset.id=p.id;
+      const del=document.createElement('button');
+      del.className='tiny';
+      del.textContent='⋮';
+      del.title='削除';
+      del.onclick=()=>{
+        if(confirm(`${p.name} を氏名一覧から削除しますか？`)){
+          state.people = state.people.filter(x=>x.id!==p.id);
+          Object.values(state.days).forEach(d=>{ if(Array.isArray(d.magnets)) d.magnets = d.magnets.filter(m=>m.personId!==p.id); });
+          saveSoon();
+          render();
+        }
+      };
+      row.append(chip, del);
+      peopleList.append(row);
+      attachTrayDrag(chip);
+    });
+  }
+
+  function renderRows(){
+    rowsEl.innerHTML='';
+    for(let i=0;i<ROW_COUNT;i++){
+      const row=document.createElement('div');
+      row.className='row';
+      row.innerHTML='<div class="cell"></div><div class="cell"></div><div class="cell"></div>';
+      rowsEl.append(row);
+    }
+  }
+
+  function renderFloating(){
+    floatingLayer.innerHTML='';
+    day().magnets.forEach(m=>{
+      const el=document.createElement('div');
+      const className = m.kind==='person'
+        ? 'floating-chip name-chip'
+        : `floating-chip status-chip ${m.value==='出張' ? 'status-trip' : 'status-direct'}`;
+      el.className = className;
+      el.style.left = `${m.x}px`;
+      el.style.top = `${m.y}px`;
+      el.dataset.magnetId = m.id;
+      if(m.kind==='person'){
+        const p = state.people.find(x=>x.id===m.personId);
+        el.textContent = p ? p.name : '';
+      } else {
+        el.textContent = m.value;
+      }
+      floatingLayer.append(el);
+      attachPlacedDrag(el);
+    });
+  }
+
+  function renderCanvas(){
+    resizeDrawingCanvas();
+  }
+
+  function render(){
+    renderPeople();
+    renderRows();
+    renderFloating();
+    renderCanvas();
+  }
+
+  function resizeDrawingCanvas(){
+    const rect = boardSurface.getBoundingClientRect();
+    const ratio = Math.max(1, window.devicePixelRatio || 1);
+    const needW = Math.round(rect.width * ratio);
+    const needH = Math.round(rect.height * ratio);
+    if(drawingCanvas.width !== needW || drawingCanvas.height !== needH){
+      const old = day().drawing;
+      drawingCanvas.width = needW;
+      drawingCanvas.height = needH;
+      drawingCanvas.style.width = rect.width + 'px';
+      drawingCanvas.style.height = rect.height + 'px';
+      const ctx = drawingCanvas.getContext('2d');
+      ctx.setTransform(ratio,0,0,ratio,0,0);
+      ctx.lineCap='round';
+      ctx.lineJoin='round';
+      if(old){
+        const img = new Image();
+        img.onload = ()=>ctx.drawImage(img,0,0,rect.width,rect.height);
+        img.src = old;
+      }
+    }
+  }
+
+  function saveCanvasToState(){
+    day().drawing = drawingCanvas.toDataURL('image/png');
+    saveSoon();
+  }
+
+  drawingCanvas.addEventListener('pointerdown', e=>{
+    if(drag) return;
+    drawingCanvas.setPointerCapture(e.pointerId);
+    const rect = drawingCanvas.getBoundingClientRect();
+    const ctx = drawingCanvas.getContext('2d');
+    const lineWidth = mode==='erase' ? Number($('#penSize').value) * 3 : Number($('#penSize').value);
+    ctx.globalCompositeOperation = mode==='erase' ? 'destination-out' : 'source-over';
+    ctx.strokeStyle = '#111';
+    ctx.lineWidth = lineWidth;
+    ctx.beginPath();
+    ctx.moveTo(e.clientX-rect.left, e.clientY-rect.top);
+    activeStroke = { pointerId:e.pointerId, rect, ctx };
+    e.preventDefault();
+  });
+  drawingCanvas.addEventListener('pointermove', e=>{
+    if(!activeStroke || activeStroke.pointerId !== e.pointerId) return;
+    const {ctx, rect} = activeStroke;
+    ctx.lineTo(e.clientX-rect.left, e.clientY-rect.top);
+    ctx.stroke();
+    e.preventDefault();
+  });
+  const finishStroke = e => {
+    if(!activeStroke || activeStroke.pointerId !== e.pointerId) return;
+    activeStroke = null;
+    saveCanvasToState();
+  };
+  drawingCanvas.addEventListener('pointerup', finishStroke);
+  drawingCanvas.addEventListener('pointercancel', finishStroke);
+
+  function attachTrayDrag(el){
+    el.onpointerdown = e => {
+      e.preventDefault();
+      e.stopPropagation();
+      startDragFromElement(el, {
+        sourceType: el.dataset.type,
+        personId: el.dataset.id || null,
+        value: el.dataset.value || null,
+        fromMagnetId: null
+      }, e, true);
+    };
+  }
+
+  function attachPlacedDrag(el){
+    el.onpointerdown = e => {
+      e.preventDefault();
+      e.stopPropagation();
+      const m = day().magnets.find(x=>x.id===el.dataset.magnetId);
+      if(!m) return;
+      startDragFromElement(el, {
+        sourceType: 'placed',
+        personId: m.personId || null,
+        value: m.value || null,
+        kind: m.kind,
+        fromMagnetId: m.id
+      }, e, false);
+    };
+  }
+
+  function startDragFromElement(el, payload, e, centerOnFirstDrop){
+    const rect = el.getBoundingClientRect();
+    const ghost = el.cloneNode(true);
+    ghost.classList.add('ghost');
+    ghost.style.width = rect.width + 'px';
+    ghost.style.height = rect.height + 'px';
+    ghost.style.minWidth = rect.width + 'px';
+    ghost.style.minHeight = rect.height + 'px';
+    ghost.style.maxWidth = rect.width + 'px';
+    ghost.style.maxHeight = rect.height + 'px';
+    document.body.append(ghost);
+    drag = {
+      ...payload,
+      ghost,
+      dx: centerOnFirstDrop ? rect.width / 2 : e.clientX - rect.left,
+      dy: centerOnFirstDrop ? rect.height / 2 : e.clientY - rect.top,
+      pointerId: e.pointerId,
+      width: rect.width,
+      height: rect.height,
+      lastX: e.clientX,
+      lastY: e.clientY,
+      lastBoardPos: null
+    };
+    moveGhost(e.clientX, e.clientY);
+  }
+
+  function moveGhost(x,y){
+    if(!drag) return;
+    drag.ghost.style.left = (x - drag.dx) + 'px';
+    drag.ghost.style.top = (y - drag.dy) + 'px';
+  }
+
+  function pointInBoard(x,y){
+    const rect = boardSurface.getBoundingClientRect();
+    return x>=rect.left && x<=rect.right && y>=rect.top && y<=rect.bottom;
+  }
+  function pointInTray(x,y){
+    return !!document.elementFromPoint(x,y)?.closest('.tray');
+  }
+  function boardPoint(x,y){
+    const rect = boardSurface.getBoundingClientRect();
+    let rx = x - rect.left - drag.dx;
+    let ry = y - rect.top - drag.dy;
+    rx = Math.max(0, Math.min(rx, rect.width - drag.width));
+    ry = Math.max(0, Math.min(ry, rect.height - drag.height));
+    return { x: Math.round(rx), y: Math.round(ry) };
+  }
+
+  document.addEventListener('pointermove', e=>{
+    if(!drag) return;
+    drag.lastX = e.clientX;
+    drag.lastY = e.clientY;
+    moveGhost(e.clientX, e.clientY);
+    drag.lastBoardPos = pointInBoard(e.clientX, e.clientY) ? boardPoint(e.clientX, e.clientY) : null;
+  }, {passive:false});
+
+  document.addEventListener('pointerup', e=>{
+    if(!drag) return;
+    const dropX = Number.isFinite(e.clientX) ? e.clientX : drag.lastX;
+    const dropY = Number.isFinite(e.clientY) ? e.clientY : drag.lastY;
+    const pos = drag.lastBoardPos || (pointInBoard(dropX, dropY) ? boardPoint(dropX, dropY) : null);
+    if(pos){
+      placeMagnetAt(pos);
+    } else if(pointInTray(dropX, dropY)){
+      returnMagnetToTray();
+    }
+    drag.ghost.remove();
+    drag = null;
+    render();
+    saveSoon();
+  });
+
+  function placeMagnetAt(pos){
+    if(drag.sourceType === 'placed'){
+      const m = day().magnets.find(x=>x.id===drag.fromMagnetId);
+      if(m){
+        m.x = pos.x;
+        m.y = pos.y;
+      }
+      return;
+    }
+    if(drag.sourceType === 'person'){
+      day().magnets = day().magnets.filter(m=>!(m.kind==='person' && m.personId===drag.personId));
+      day().magnets.push({
+        id:'m'+Date.now()+Math.random().toString(16).slice(2),
+        kind:'person',
+        personId:drag.personId,
+        x:pos.x,
+        y:pos.y
+      });
+      return;
+    }
+    if(drag.sourceType === 'status'){
+      day().magnets.push({
+        id:'m'+Date.now()+Math.random().toString(16).slice(2),
+        kind:'status',
+        value:drag.value,
+        x:pos.x,
+        y:pos.y
+      });
+    }
+  }
+
+  function returnMagnetToTray(){
+    if(drag.sourceType === 'placed'){
+      day().magnets = day().magnets.filter(m=>m.id !== drag.fromMagnetId);
+    }
+  }
+
+  function setMode(m){
+    mode = m;
+    $('#eraseBtn').classList.toggle('active', m==='erase');
+    toast(m==='erase' ? '消しゴムモード' : '手書きモード');
+  }
+
+  $('#eraseBtn').onclick = ()=> setMode(mode==='erase' ? 'pen' : 'erase');
+  $('#undoBtn').onclick = ()=>{
+    if(day().drawing){
+      day().drawing = null;
+      saveSoon();
+      renderCanvas();
+      toast('手書きを消しました');
+    } else {
+      toast('消せる手書きがありません');
+    }
+  };
+  dateEl.onchange = ()=>{
+    setMode('pen');
+    render();
+  };
+
+  $('#clearDayBtn').onclick = ()=>{
+    if(confirm(`${dateEl.value} の配置・手書きをすべて消去しますか？`)){
+      state.days[dateEl.value] = emptyDay();
+      saveSoon();
+      render();
+    }
+  };
+
+  $('#resetPeopleBtn').onclick = ()=>{
+    day().magnets = day().magnets.filter(m=>m.kind!=='person');
+    saveSoon();
+    render();
+  };
+
+  $('#addPersonBtn').onclick = ()=>{
+    modal.classList.add('show');
+    $('#personName').value='';
+    setTimeout(()=>$('#personName').focus(),50);
+  };
+  document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>modal.classList.remove('show'));
+  $('#savePersonBtn').onclick = ()=>{
+    const name = $('#personName').value.trim();
+    if(!name) return;
+    state.people.push({id:'p'+Date.now(), name});
+    modal.classList.remove('show');
+    saveSoon();
+    render();
+  };
+
+  $('#backupBtn').onclick = ()=>{
+    const blob = new Blob([JSON.stringify(state,null,2)], {type:'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `schedule-board-backup_${dateEl.value}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast('バックアップを保存しました');
+  };
+  $('#restoreBtn').onclick = ()=> $('#restoreFile').click();
+  $('#restoreFile').onchange = async e=>{
+    const f = e.target.files[0];
+    if(!f) return;
+    try{
+      const obj = JSON.parse(await f.text());
+      if(!obj.people || !obj.days) throw new Error();
+      state = obj;
+      saveSoon();
+      render();
+      toast('バックアップを読み込みました');
+    }catch(err){
+      alert('読み込みに失敗しました。正しいバックアップファイルを選択してください。');
+    }
+    e.target.value='';
+  };
+  $('#fullBtn').onclick = async()=>{
+    try{
+      if(!document.fullscreenElement) await document.documentElement.requestFullscreen();
+      else await document.exitFullscreen();
+    }catch(e){}
+  };
+
+  document.querySelectorAll('.magnet-box .status-chip').forEach(attachTrayDrag);
+  window.addEventListener('resize', ()=> renderCanvas());
+  document.addEventListener('dblclick', e=>{
+    const chip = e.target.closest('.floating-chip');
+    if(!chip) return;
+    day().magnets = day().magnets.filter(m=>m.id !== chip.dataset.magnetId);
+    saveSoon();
+    render();
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>
