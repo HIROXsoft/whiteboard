@@ -146,15 +146,16 @@
   'use strict';
 
   /* GASをウェブアプリとしてデプロイ後、発行URLに置き換えてください。 */
-  const GAS_URL = 'https://script.google.com/macros/s/AKfycbx1WLt_mAbN9zyQcFrdRzb0yxe1QlJMJ7HC257gc4wdnV0rXeC5smlZDFyg0RtevwvaMA/exec';
+  const GAS_URL = 'https://script.google.com/macros/s/AKfycbwZzMauawBpL-G0K2Fra6acWZub_Ykb4WSql_FSqncPvPhpbnZENWvObhQbBVWyS7_X/exec';
   const API_TOKEN = 'hirox';
   const ROW_COUNT = 16;
   const CACHE_KEY = 'hirox_schedule_board_shared_cache_vector_v1';
   const PEN_WIDTH = 5;
   const ERASER_WIDTH = 58;
-  const POLL_INTERVAL_MS = 10000;
-  const SAVE_DEBOUNCE_MS = 450;
-  const REQUEST_TIMEOUT_MS = 8000;
+  const POLL_INTERVAL_MS = 2000;
+  const SAVE_DEBOUNCE_MS = 160;
+  const REQUEST_TIMEOUT_MS = 7000;
+  const ACK_POLL_MS = 120;
 
   const $ = s => document.querySelector(s);
   const rowsEl = $('#rows');
@@ -245,16 +246,36 @@
     setTimeout(()=>t.classList.remove('show'),1500);
   }
 
-  function markChanged(){
+  function markChanged(delayMs = SAVE_DEBOUNCE_MS){
     isDirty = true;
     cacheState();
     setSyncStatus('saving', '未同期');
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(saveRemote, SAVE_DEBOUNCE_MS);
+    saveTimer = setTimeout(saveRemote, delayMs);
+  }
+
+  function compactState(){
+    const src = normalizeState(state);
+    return {
+      people: src.people.map(p => ({id:String(p.id), name:String(p.name)})),
+      days: {board: {
+        magnets: src.days.board.magnets.map(m => ({
+          id:String(m.id), kind:String(m.kind),
+          ...(m.personId ? {personId:String(m.personId)} : {}),
+          ...(m.value ? {value:String(m.value)} : {}),
+          x:Math.round(Number(m.x)||0), y:Math.round(Number(m.y)||0)
+        })),
+        strokes: src.days.board.strokes.map(st => ({
+          tool:st.tool === 'erase' ? 'erase' : 'pen',
+          width:Math.round(Number(st.width)||PEN_WIDTH),
+          points:(st.points||[]).map(pt => [Number(Number(pt[0]).toFixed(4)), Number(Number(pt[1]).toFixed(4))])
+        }))
+      }}
+    };
   }
 
   function stablePayload(){
-    return JSON.stringify(normalizeState(state));
+    return JSON.stringify(compactState());
   }
 
   function jsonp(params, timeoutMs = REQUEST_TIMEOUT_MS){
@@ -287,53 +308,39 @@
 
   function postByHiddenForm(fields){
     return new Promise((resolve, reject) => {
-      if(!isGasConfigured()){
-        reject(new Error('GAS_URL_NOT_CONFIGURED'));
-        return;
-      }
+      if(!isGasConfigured()) return reject(new Error('GAS_URL_NOT_CONFIGURED'));
       const iframeName = 'syncFrame_' + Date.now() + '_' + Math.random().toString(36).slice(2);
       const iframe = document.createElement('iframe');
       iframe.name = iframeName;
       iframe.style.display = 'none';
-      iframe.setAttribute('aria-hidden','true');
       const form = document.createElement('form');
       form.method = 'POST';
       form.action = GAS_URL;
       form.target = iframeName;
       form.style.display = 'none';
-
       Object.entries(fields).forEach(([name,value]) => {
         const input = document.createElement('input');
-        input.type = 'hidden';
-        input.name = name;
-        input.value = String(value ?? '');
+        input.type = 'hidden'; input.name = name; input.value = String(value ?? '');
         form.appendChild(input);
       });
-
       document.body.append(iframe, form);
-      let submitted = false;
-      const cleanup = () => setTimeout(() => { form.remove(); iframe.remove(); }, 1000);
-      iframe.addEventListener('load', () => {
-        if(!submitted) return;
-        cleanup();
-        resolve();
-      }, {once:true});
-      iframe.addEventListener('error', () => {
-        cleanup();
-        reject(new Error('post_failed'));
-      }, {once:true});
-      submitted = true;
-      form.submit();
-      setTimeout(() => { cleanup(); resolve(); }, 4000);
+      try{
+        form.submit();
+        setTimeout(resolve, 60);
+      }catch(err){
+        reject(err);
+      }
+      setTimeout(() => { form.remove(); iframe.remove(); }, 12000);
     });
   }
 
   async function waitForAck(requestId){
     const deadline = Date.now() + REQUEST_TIMEOUT_MS;
+    await new Promise(r => setTimeout(r, ACK_POLL_MS));
     while(Date.now() < deadline){
-      const res = await jsonp({action:'ack', requestId}, 6000);
+      const res = await jsonp({action:'ack', requestId}, 4500);
       if(res && res.pending){
-        await new Promise(r => setTimeout(r, 350));
+        await new Promise(r => setTimeout(r, ACK_POLL_MS));
         continue;
       }
       return res;
@@ -389,9 +396,13 @@
     loadInFlight = true;
     if(initial) setSyncStatus('loading', '同期確認中…');
     try{
-      const res = await jsonp({action:'load', clientId}, REQUEST_TIMEOUT_MS);
+      const res = await jsonp({action:'load', clientId, since:revision}, REQUEST_TIMEOUT_MS);
       if(!res || !res.ok) throw new Error(res && res.error ? res.error : 'load_failed');
       const remoteRevision = Number(res.revision || 0);
+      if(res.notModified){
+        setSyncStatus('ok', '同期済み');
+        return;
+      }
       if(res.state && (initial || remoteRevision > revision)){
         state = normalizeState(res.state);
         revision = remoteRevision;
@@ -563,16 +574,28 @@
     const prev = points[points.length-1];
     if(Math.abs(point[0]-prev[0]) + Math.abs(point[1]-prev[1]) < 0.0015) return;
     points.push(point);
-    redrawDrawingFromState();
-    drawStroke(configureDrawingContext(), activeStroke.stroke);
+    const segment = {...activeStroke.stroke, points:[prev, point]};
+    drawStroke(configureDrawingContext(), segment);
     e.preventDefault();
   });
+  function simplifyPoints(points){
+    if(!Array.isArray(points) || points.length < 3) return points || [];
+    const out=[points[0]];
+    for(let i=1;i<points.length-1;i++){
+      const a=out[out.length-1], b=points[i];
+      if(Math.abs(b[0]-a[0]) + Math.abs(b[1]-a[1]) >= 0.0022) out.push(b);
+    }
+    out.push(points[points.length-1]);
+    return out;
+  }
+
   const finishStroke = e => {
     if(!activeStroke || activeStroke.pointerId !== e.pointerId) return;
+    activeStroke.stroke.points = simplifyPoints(activeStroke.stroke.points);
     day().strokes.push(activeStroke.stroke);
     activeStroke = null;
-    markChanged();
     redrawDrawingFromState();
+    markChanged(120);
   };
   drawingCanvas.addEventListener('pointerup', finishStroke);
   drawingCanvas.addEventListener('pointercancel', finishStroke);
@@ -654,12 +677,13 @@
     const dropX=Number.isFinite(e.clientX)?e.clientX:drag.lastX;
     const dropY=Number.isFinite(e.clientY)?e.clientY:drag.lastY;
     const pos=drag.lastBoardPos || (pointInBoard(dropX,dropY)?boardPoint(dropX,dropY):null);
-    if(pos) placeMagnetAt(pos);
-    else if(pointInTray(dropX,dropY)) returnMagnetToTray();
+    let changed=false;
+    if(pos){ placeMagnetAt(pos); changed=true; }
+    else if(pointInTray(dropX,dropY)){ returnMagnetToTray(); changed=currentDrag.sourceType==='placed'; }
     currentDrag.ghost.remove();
     drag=null;
     render();
-    markChanged();
+    if(changed) markChanged(80);
   });
 
   function placeMagnetAt(pos){
