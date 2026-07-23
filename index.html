@@ -146,7 +146,7 @@
   'use strict';
 
   /* GASをウェブアプリとしてデプロイ後、発行URLに置き換えてください。 */
-  const GAS_URL = 'https://script.google.com/macros/s/AKfycbwZzMauawBpL-G0K2Fra6acWZub_Ykb4WSql_FSqncPvPhpbnZENWvObhQbBVWyS7_X/exec';
+  const GAS_URL = 'https://script.google.com/macros/s/AKfycbwh7QAF48O2HdRYe73L6MaJAQKoZ7sXukcryDJ7nl8Wos7d0LNQVk14_7FpKSCVs2RPyQ/exec';
   const API_TOKEN = 'hirox';
   const ROW_COUNT = 16;
   const CACHE_KEY = 'hirox_schedule_board_shared_cache_vector_v1';
@@ -228,6 +228,39 @@
     return /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec(?:\?.*)?$/.test(GAS_URL);
   }
 
+  function clamp01(value){
+    return Math.max(0, Math.min(1, Number(value) || 0));
+  }
+
+  function isRatioMagnet(m){
+    return m && m.coordinateMode === 'ratio';
+  }
+
+  function magnetDisplayPosition(m, el){
+    const boardRect = boardSurface.getBoundingClientRect();
+    const width = el ? el.offsetWidth : 0;
+    const height = el ? el.offsetHeight : 0;
+    const maxX = Math.max(0, boardRect.width - width);
+    const maxY = Math.max(0, boardRect.height - height);
+    if(isRatioMagnet(m)){
+      return {x:clamp01(m.x) * maxX, y:clamp01(m.y) * maxY};
+    }
+    return {x:Math.max(0, Math.min(Number(m.x)||0, maxX)), y:Math.max(0, Math.min(Number(m.y)||0, maxY))};
+  }
+
+  function migrateLegacyMagnetToRatio(m, el){
+    if(isRatioMagnet(m)) return false;
+    const boardRect = boardSurface.getBoundingClientRect();
+    const width = el ? el.offsetWidth : 0;
+    const height = el ? el.offsetHeight : 0;
+    const maxX = Math.max(1, boardRect.width - width);
+    const maxY = Math.max(1, boardRect.height - height);
+    m.x = clamp01((Number(m.x)||0) / maxX);
+    m.y = clamp01((Number(m.y)||0) / maxY);
+    m.coordinateMode = 'ratio';
+    return true;
+  }
+
   function setSyncStatus(type, text){
     if(!syncBadge) return;
     syncBadge.className = 'sync-badge ' + type;
@@ -263,7 +296,8 @@
           id:String(m.id), kind:String(m.kind),
           ...(m.personId ? {personId:String(m.personId)} : {}),
           ...(m.value ? {value:String(m.value)} : {}),
-          x:Math.round(Number(m.x)||0), y:Math.round(Number(m.y)||0)
+          x:Number(clamp01(m.x).toFixed(6)), y:Number(clamp01(m.y).toFixed(6)),
+          coordinateMode:'ratio'
         })),
         strokes: src.days.board.strokes.map(st => ({
           tool:st.tool === 'erase' ? 'erase' : 'pen',
@@ -476,8 +510,7 @@
         ? 'floating-chip name-chip'
         : `floating-chip status-chip ${m.value==='出張' ? 'status-trip' : 'status-direct'}`;
       el.className = className;
-      el.style.left = `${m.x}px`;
-      el.style.top = `${m.y}px`;
+      el.style.visibility = 'hidden';
       el.dataset.magnetId = m.id;
       if(m.kind==='person'){
         const p = state.people.find(x=>x.id===m.personId);
@@ -486,7 +519,13 @@
         el.textContent = m.value;
       }
       floatingLayer.append(el);
+      const migrated = migrateLegacyMagnetToRatio(m, el);
+      const pos = magnetDisplayPosition(m, el);
+      el.style.left = `${pos.x}px`;
+      el.style.top = `${pos.y}px`;
+      el.style.visibility = 'visible';
       attachPlacedDrag(el);
+      if(migrated) markChanged(300);
     });
   }
 
@@ -657,11 +696,13 @@
   function pointInTray(x,y){ return !!document.elementFromPoint(x,y)?.closest('.tray'); }
   function boardPoint(x,y){
     const rect=boardSurface.getBoundingClientRect();
+    const maxX=Math.max(1,rect.width-drag.width);
+    const maxY=Math.max(1,rect.height-drag.height);
     let rx=x-rect.left-drag.dx;
     let ry=y-rect.top-drag.dy;
-    rx=Math.max(0,Math.min(rx,rect.width-drag.width));
-    ry=Math.max(0,Math.min(ry,rect.height-drag.height));
-    return {x:Math.round(rx),y:Math.round(ry)};
+    rx=Math.max(0,Math.min(rx,maxX));
+    ry=Math.max(0,Math.min(ry,maxY));
+    return {x:Number((rx/maxX).toFixed(6)),y:Number((ry/maxY).toFixed(6)),coordinateMode:'ratio'};
   }
 
   document.addEventListener('pointermove',e=>{
@@ -689,16 +730,16 @@
   function placeMagnetAt(pos){
     if(drag.sourceType==='placed'){
       const m=day().magnets.find(x=>x.id===drag.fromMagnetId);
-      if(m){m.x=pos.x;m.y=pos.y;}
+      if(m){m.x=pos.x;m.y=pos.y;m.coordinateMode='ratio';}
       return;
     }
     if(drag.sourceType==='person'){
       day().magnets=day().magnets.filter(m=>!(m.kind==='person'&&m.personId===drag.personId));
-      day().magnets.push({id:'m'+Date.now()+Math.random().toString(16).slice(2),kind:'person',personId:drag.personId,x:pos.x,y:pos.y});
+      day().magnets.push({id:'m'+Date.now()+Math.random().toString(16).slice(2),kind:'person',personId:drag.personId,x:pos.x,y:pos.y,coordinateMode:'ratio'});
       return;
     }
     if(drag.sourceType==='status'){
-      day().magnets.push({id:'m'+Date.now()+Math.random().toString(16).slice(2),kind:'status',value:drag.value,x:pos.x,y:pos.y});
+      day().magnets.push({id:'m'+Date.now()+Math.random().toString(16).slice(2),kind:'status',value:drag.value,x:pos.x,y:pos.y,coordinateMode:'ratio'});
     }
   }
 
@@ -756,7 +797,7 @@
   };
 
   document.querySelectorAll('.magnet-box .status-chip').forEach(attachTrayDrag);
-  window.addEventListener('resize',()=>renderCanvas());
+  window.addEventListener('resize',()=>{ renderFloating(); renderCanvas(); });
   document.addEventListener('visibilitychange',()=>{
     if(document.visibilityState==='visible') loadRemote();
   });
