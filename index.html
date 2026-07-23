@@ -36,20 +36,21 @@
   .btn.active{background:#102a43;color:#fff;border-color:#102a43}
   .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
   .btn.danger{background:#fff2f2;color:#9c1818;border-color:#e0abab}
-  .layout{min-height:0;flex:1;display:grid;grid-template-columns:minmax(170px,22vw) 1fr;gap:8px}
+  .layout{min-height:0;flex:1;display:grid;grid-template-columns:clamp(145px,14vw,180px) minmax(0,1fr);gap:6px}
   .tray{min-height:0;background:var(--panel);border-radius:14px;box-shadow:var(--shadow);display:flex;flex-direction:column;overflow:hidden}
-  .tray-head{padding:10px;border-bottom:1px solid #cbd5da;font-weight:900;font-size:18px}
-  .tray-actions{padding:8px;display:grid;grid-template-columns:1fr 1fr;gap:6px;border-bottom:1px solid #d5dde1}
-  .tray-list{min-height:0;overflow:auto;padding:8px;display:flex;flex-direction:column;gap:7px}
-  .person-card{display:grid;grid-template-columns:auto 1fr;gap:6px;align-items:center}
+  .tray-head{padding:7px 6px;border-bottom:1px solid #cbd5da;font-weight:900;font-size:15px;text-align:center}
+  .tray-actions{padding:5px;display:grid;grid-template-columns:1fr;gap:4px;border-bottom:1px solid #d5dde1}
+  .tray .btn{min-height:36px;padding:5px 4px;border-radius:8px;font-size:13px}
+  .tray-list{min-height:0;overflow:auto;padding:5px;display:flex;flex-direction:column;gap:5px}
+  .person-card{display:grid;grid-template-columns:1fr auto;gap:3px;align-items:center}
   .name-chip,.status-chip{user-select:none;-webkit-user-select:none;touch-action:none;cursor:grab;border-radius:8px;font-weight:900;display:inline-flex;align-items:center;justify-content:center;box-shadow:0 3px 8px rgba(0,0,0,.18);border:1px solid rgba(0,0,0,.18)}
   .name-chip{background:linear-gradient(#fff,#edf2f5);width:var(--name-magnet-w);height:var(--name-magnet-h);min-width:var(--name-magnet-w);min-height:var(--name-magnet-h);padding:7px 8px;font-size:clamp(17px,1.7vw,25px);letter-spacing:.08em;white-space:nowrap;flex:none}
   .status-chip{width:var(--status-magnet-w);height:var(--status-magnet-h);min-width:var(--status-magnet-w);min-height:var(--status-magnet-h);padding:9px 8px;font-size:clamp(16px,1.5vw,22px);color:#111;font-weight:900;white-space:nowrap;flex:none}
   .status-direct,.status-return{background:#8fc6ff}
   .status-trip{background:#ffe26a}
   .name-chip:hover,.status-chip:hover,.floating-chip:hover{filter:brightness(.98);box-shadow:0 6px 14px rgba(0,0,0,.22)}
-  .tiny{border:0;background:transparent;font-size:19px;padding:8px;cursor:pointer}
-  .magnet-box{padding:8px;border-top:1px solid #cbd5da;display:flex;flex-wrap:wrap;gap:7px;justify-content:center}
+  .tiny{border:0;background:transparent;font-size:16px;padding:4px;cursor:pointer}
+  .magnet-box{padding:5px;border-top:1px solid #cbd5da;display:flex;flex-direction:column;align-items:center;gap:5px}
   .board-wrap{min-width:0;min-height:0;background:var(--board);border-radius:14px;box-shadow:var(--shadow);overflow:auto;position:relative}
   .board{min-width:760px;padding:10px 14px 18px}
   .board-title{border-bottom:3px solid var(--line-strong);padding:4px 4px 8px;background:var(--board)}
@@ -77,7 +78,7 @@
   .toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:#132f4c;color:#fff;padding:10px 16px;border-radius:999px;box-shadow:var(--shadow);z-index:200;opacity:0;pointer-events:none;transition:.2s}
   .toast.show{opacity:1}
   @media (max-width:900px){
-    .layout{grid-template-columns:150px 1fr}
+    .layout{grid-template-columns:140px minmax(0,1fr)}
     .title{display:none}
     .topbar{align-items:flex-start}
     .tool-group{gap:4px}
@@ -102,7 +103,7 @@
       <div class="tray-head">氏名マグネット</div>
       <div class="tray-actions">
         <button class="btn" id="addPersonBtn">＋ 氏名追加</button>
-        <button class="btn" id="resetPeopleBtn">ボードから戻す</button>
+        <button class="btn" id="resetPeopleBtn">氏名を戻す</button>
       </div>
       <div id="peopleList" class="tray-list"></div>
       <div class="magnet-box">
