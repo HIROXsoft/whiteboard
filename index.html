@@ -146,7 +146,7 @@
   'use strict';
 
   /* GASをウェブアプリとしてデプロイ後、発行URLに置き換えてください。 */
-  const GAS_URL = 'https://script.google.com/macros/s/AKfycbyCucO5eHOFu7oS8ACDDpGSUgFIRotPhm7scXjMyQUDLmk1-p0y9k2OlHB68ntvF5GBIA/exec';
+  const GAS_URL = 'https://script.google.com/macros/s/AKfycbxY-v-yack84miIy5SN0DIJ0fyXUuVLdspBFTJjfIpJSrEwWmNF6F7J4c5CB-ITOOQGRQ/exec';
   const API_TOKEN = 'hirox';
   const ROW_COUNT = 16;
   const CACHE_KEY = 'hirox_schedule_board_shared_cache_v1';
@@ -167,6 +167,7 @@
 
   let state = loadCachedState();
   let revision = 0;
+  let drawingRevision = 0;
   let mode = 'pen';
   let drag = null;
   let activeStroke = null;
@@ -362,6 +363,7 @@
       const ack = await waitForAck(requestId);
       if(!ack || !ack.ok) throw new Error(ack && ack.error ? ack.error : 'save_failed');
       revision = Number(ack.revision || revision + 1);
+      if(ack.drawing) drawingRevision = Number(ack.drawing.revision || drawingRevision);
       lastSavedPayload = payload;
       isDirty = stablePayload() !== payload;
       cacheState();
@@ -379,6 +381,33 @@
     }
   }
 
+  async function loadRemoteDrawing(meta){
+    const info = meta && typeof meta === 'object' ? meta : {};
+    const remoteDrawingRevision = Number(info.revision || 0);
+    const chunks = Number(info.chunks || 0);
+    const expectedLength = Number(info.length || 0);
+
+    if(!chunks || !expectedLength){
+      day().drawing = null;
+      drawingRevision = remoteDrawingRevision;
+      return;
+    }
+    if(remoteDrawingRevision === drawingRevision && day().drawing) return;
+
+    setSyncStatus('loading', '手書き読込中…');
+    const parts = [];
+    for(let i=0;i<chunks;i++){
+      const part = await jsonp({action:'drawingChunk', index:String(i)}, 10000);
+      if(!part || !part.ok || Number(part.index) !== i) throw new Error('drawing_chunk_failed_' + i);
+      parts.push(String(part.data || ''));
+    }
+    const drawing = parts.join('');
+    if(drawing.length !== expectedLength) throw new Error('drawing_length_mismatch');
+    if(drawing && !/^data:image\/png;base64,/.test(drawing)) throw new Error('drawing_format_invalid');
+    day().drawing = drawing || null;
+    drawingRevision = remoteDrawingRevision;
+  }
+
   async function loadRemote({initial=false} = {}){
     if(loadInFlight || saveInFlight || drag || activeStroke || isDirty) return;
     if(!isGasConfigured()){
@@ -388,11 +417,15 @@
     loadInFlight = true;
     if(initial) setSyncStatus('loading', '接続中…');
     try{
-      const res = await jsonp({action:'load', clientId});
+      const res = await jsonp({action:'load', clientId}, 10000);
       if(!res || !res.ok) throw new Error(res && res.error ? res.error : 'load_failed');
       const remoteRevision = Number(res.revision || 0);
       if(res.state && (initial || remoteRevision > revision)){
-        state = normalizeState(res.state);
+        const cachedDrawing = day().drawing;
+        const remoteState = normalizeState(res.state);
+        remoteState.days.board.drawing = cachedDrawing;
+        state = remoteState;
+        await loadRemoteDrawing(res.drawing);
         revision = remoteRevision;
         lastSavedPayload = stablePayload();
         cacheState();
@@ -404,7 +437,7 @@
       setSyncStatus('ok', '同期済み');
     }catch(e){
       console.error('読み込みエラー', e);
-      setSyncStatus('error', 'オフライン');
+      setSyncStatus('error', '読込失敗');
       if(initial) toast('共通データを取得できないため、端末内の予備データを表示しています。');
     }finally{
       loadInFlight = false;
