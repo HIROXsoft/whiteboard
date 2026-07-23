@@ -146,15 +146,15 @@
   'use strict';
 
   /* GASをウェブアプリとしてデプロイ後、発行URLに置き換えてください。 */
-  const GAS_URL = 'https://script.google.com/macros/s/AKfycbxY-v-yack84miIy5SN0DIJ0fyXUuVLdspBFTJjfIpJSrEwWmNF6F7J4c5CB-ITOOQGRQ/exec';
+  const GAS_URL = 'https://script.google.com/macros/s/AKfycbz9474WUW1UHMPayGhFyh_I-ijQLLezjaEfDv0tXCBwFO5yJEVSBaSKQCQ4XUgB6klgSQ/exec';
   const API_TOKEN = 'hirox';
   const ROW_COUNT = 16;
   const CACHE_KEY = 'hirox_schedule_board_shared_cache_v1';
   const PEN_WIDTH = 5;
   const ERASER_WIDTH = 58;
-  const POLL_INTERVAL_MS = 3000;
+  const POLL_INTERVAL_MS = 5000;
   const SAVE_DEBOUNCE_MS = 450;
-  const REQUEST_TIMEOUT_MS = 15000;
+  const REQUEST_TIMEOUT_MS = 30000;
 
   const $ = s => document.querySelector(s);
   const rowsEl = $('#rows');
@@ -381,30 +381,19 @@
     }
   }
 
-  async function loadRemoteDrawing(meta){
+  function applyRemoteDrawing(drawing, meta){
     const info = meta && typeof meta === 'object' ? meta : {};
     const remoteDrawingRevision = Number(info.revision || 0);
-    const chunks = Number(info.chunks || 0);
     const expectedLength = Number(info.length || 0);
+    const value = drawing ? String(drawing) : '';
 
-    if(!chunks || !expectedLength){
-      day().drawing = null;
-      drawingRevision = remoteDrawingRevision;
-      return;
+    if(value && !/^data:image\/png;base64,/.test(value)){
+      throw new Error('drawing_format_invalid');
     }
-    if(remoteDrawingRevision === drawingRevision && day().drawing) return;
-
-    setSyncStatus('loading', '手書き読込中…');
-    const parts = [];
-    for(let i=0;i<chunks;i++){
-      const part = await jsonp({action:'drawingChunk', index:String(i)}, 10000);
-      if(!part || !part.ok || Number(part.index) !== i) throw new Error('drawing_chunk_failed_' + i);
-      parts.push(String(part.data || ''));
+    if(expectedLength && value.length !== expectedLength){
+      throw new Error('drawing_length_mismatch');
     }
-    const drawing = parts.join('');
-    if(drawing.length !== expectedLength) throw new Error('drawing_length_mismatch');
-    if(drawing && !/^data:image\/png;base64,/.test(drawing)) throw new Error('drawing_format_invalid');
-    day().drawing = drawing || null;
+    day().drawing = value || null;
     drawingRevision = remoteDrawingRevision;
   }
 
@@ -417,15 +406,12 @@
     loadInFlight = true;
     if(initial) setSyncStatus('loading', '接続中…');
     try{
-      const res = await jsonp({action:'load', clientId}, 10000);
+      const res = await jsonp({action:'load', clientId}, REQUEST_TIMEOUT_MS);
       if(!res || !res.ok) throw new Error(res && res.error ? res.error : 'load_failed');
       const remoteRevision = Number(res.revision || 0);
       if(res.state && (initial || remoteRevision > revision)){
-        const cachedDrawing = day().drawing;
-        const remoteState = normalizeState(res.state);
-        remoteState.days.board.drawing = cachedDrawing;
-        state = remoteState;
-        await loadRemoteDrawing(res.drawing);
+        state = normalizeState(res.state);
+        applyRemoteDrawing(res.drawingData || '', res.drawing);
         revision = remoteRevision;
         lastSavedPayload = stablePayload();
         cacheState();
