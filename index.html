@@ -77,6 +77,10 @@
   .dialog-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
   .toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:#132f4c;color:#fff;padding:10px 16px;border-radius:999px;box-shadow:var(--shadow);z-index:200;opacity:0;pointer-events:none;transition:.2s}
   .toast.show{opacity:1}
+  .sync-badge{display:inline-flex;align-items:center;justify-content:center;min-width:84px;min-height:36px;padding:6px 10px;border-radius:999px;font-size:13px;font-weight:900;white-space:nowrap;border:1px solid #b6c2c8;background:#f3f6f8;color:#33434c}
+  .sync-badge.ok{background:#e8f7ec;color:#176b32;border-color:#9dd4aa}
+  .sync-badge.saving,.sync-badge.loading{background:#fff7d6;color:#765b00;border-color:#ddc86b}
+  .sync-badge.error{background:#fff0f0;color:#a11d1d;border-color:#e2aaaa}
   @media (max-width:900px){
     .layout{grid-template-columns:140px minmax(0,1fr)}
     .title{display:none}
@@ -94,6 +98,7 @@
       <button class="btn" id="eraseBtn">⌫ 消しゴムON/OFF</button>
             <button class="btn" id="undoBtn">↶ 戻す</button>
       <button class="btn danger" id="clearDrawingBtn">手書き分を全消去</button>
+      <span id="syncBadge" class="sync-badge loading">接続中…</span>
       <button class="btn primary" id="fullBtn">全画面</button>
     </div>
   </header>
@@ -139,11 +144,17 @@
 <script>
 (() => {
   'use strict';
+
+  /* GASをウェブアプリとしてデプロイ後、発行URLに置き換えてください。 */
+  const GAS_URL = 'https://script.google.com/macros/s/AKfycbyCucO5eHOFu7oS8ACDDpGSUgFIRotPhm7scXjMyQUDLmk1-p0y9k2OlHB68ntvF5GBIA/exec';
+  const API_TOKEN = 'hirox';
   const ROW_COUNT = 16;
-  const KEY = 'hirox_schedule_board_v4';
-  const defaultPeople = [];
+  const CACHE_KEY = 'hirox_schedule_board_shared_cache_v1';
   const PEN_WIDTH = 5;
   const ERASER_WIDTH = 58;
+  const POLL_INTERVAL_MS = 3000;
+  const SAVE_DEBOUNCE_MS = 450;
+  const REQUEST_TIMEOUT_MS = 15000;
 
   const $ = s => document.querySelector(s);
   const rowsEl = $('#rows');
@@ -152,44 +163,254 @@
   const boardSurface = $('#boardSurface');
   const drawingCanvas = $('#drawingCanvas');
   const floatingLayer = $('#floatingLayer');
+  const syncBadge = $('#syncBadge');
 
-  let state = loadState();
+  let state = loadCachedState();
+  let revision = 0;
   let mode = 'pen';
   let drag = null;
   let activeStroke = null;
-  let saveTimer;
+  let saveTimer = null;
+  let pollTimer = null;
+  let isDirty = false;
+  let saveInFlight = false;
+  let loadInFlight = false;
+  let lastSavedPayload = '';
+  let clientId = getClientId();
 
   function emptyDay(){
     return { drawing:null, magnets:[] };
   }
-  function loadState(){
+
+  function defaultState(){
+    return { people:[], days:{ board:emptyDay() } };
+  }
+
+  function normalizeState(value){
+    const safe = value && typeof value === 'object' ? value : defaultState();
+    if(!Array.isArray(safe.people)) safe.people = [];
+    if(!safe.days || typeof safe.days !== 'object') safe.days = {};
+    if(!safe.days.board || typeof safe.days.board !== 'object') safe.days.board = emptyDay();
+    if(!Array.isArray(safe.days.board.magnets)) safe.days.board.magnets = [];
+    if(!('drawing' in safe.days.board)) safe.days.board.drawing = null;
+    return safe;
+  }
+
+  function loadCachedState(){
     try{
-      const v = JSON.parse(localStorage.getItem(KEY));
-      if(v && Array.isArray(v.people) && v.days) return v;
-    }catch(e){}
-    return { people: defaultPeople.map((name,i)=>({id:'p'+Date.now()+i,name})), days:{} };
-  }
-  function day(){
-    const k = 'board';
-    if(!state.days[k]){
-      const previousKeys = Object.keys(state.days).filter(key=>key!=='board');
-      const sourceKey = previousKeys.sort().reverse()[0];
-      state.days[k] = sourceKey ? state.days[sourceKey] : emptyDay();
+      return normalizeState(JSON.parse(localStorage.getItem(CACHE_KEY)));
+    }catch(e){
+      return defaultState();
     }
-    if(!Array.isArray(state.days[k].magnets)) state.days[k].magnets = [];
-    if(!('drawing' in state.days[k])) state.days[k].drawing = null;
-    return state.days[k];
   }
-  function saveSoon(){
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(()=>localStorage.setItem(KEY, JSON.stringify(state)), 120);
+
+  function cacheState(){
+    try{
+      localStorage.setItem(CACHE_KEY, JSON.stringify(state));
+    }catch(e){
+      console.warn('ローカル予備キャッシュの保存に失敗しました。', e);
+    }
   }
+
+  function getClientId(){
+    const key = 'hirox_schedule_board_client_id';
+    let id = localStorage.getItem(key);
+    if(!id){
+      id = 'c_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,10);
+      localStorage.setItem(key, id);
+    }
+    return id;
+  }
+
+  function isGasConfigured(){
+    return /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec(?:\?.*)?$/.test(GAS_URL);
+  }
+
+  function setSyncStatus(type, text){
+    if(!syncBadge) return;
+    syncBadge.className = 'sync-badge ' + type;
+    syncBadge.textContent = text;
+  }
+
+  function day(){
+    state = normalizeState(state);
+    return state.days.board;
+  }
+
   function toast(msg){
     const t=$('#toast');
     t.textContent=msg;
     t.classList.add('show');
     setTimeout(()=>t.classList.remove('show'),1500);
   }
+
+  function markChanged(){
+    isDirty = true;
+    cacheState();
+    setSyncStatus('saving', '未同期');
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(saveRemote, SAVE_DEBOUNCE_MS);
+  }
+
+  function stablePayload(){
+    return JSON.stringify(normalizeState(state));
+  }
+
+  function jsonp(params, timeoutMs = REQUEST_TIMEOUT_MS){
+    return new Promise((resolve, reject) => {
+      if(!isGasConfigured()){
+        reject(new Error('GAS_URL_NOT_CONFIGURED'));
+        return;
+      }
+      const callbackName = '__hiroxJsonp_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+      const script = document.createElement('script');
+      const timer = setTimeout(() => finish(new Error('timeout')), timeoutMs);
+      let done = false;
+
+      function finish(error, data){
+        if(done) return;
+        done = true;
+        clearTimeout(timer);
+        try{ delete window[callbackName]; }catch(e){ window[callbackName] = undefined; }
+        script.remove();
+        error ? reject(error) : resolve(data);
+      }
+
+      window[callbackName] = data => finish(null, data);
+      script.onerror = () => finish(new Error('network'));
+      const query = new URLSearchParams({ ...params, token:API_TOKEN, callback:callbackName, _:Date.now().toString() });
+      script.src = GAS_URL + (GAS_URL.includes('?') ? '&' : '?') + query.toString();
+      document.head.appendChild(script);
+    });
+  }
+
+  function postByHiddenForm(fields){
+    return new Promise((resolve, reject) => {
+      if(!isGasConfigured()){
+        reject(new Error('GAS_URL_NOT_CONFIGURED'));
+        return;
+      }
+      const iframeName = 'syncFrame_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+      const iframe = document.createElement('iframe');
+      iframe.name = iframeName;
+      iframe.style.display = 'none';
+      iframe.setAttribute('aria-hidden','true');
+      const form = document.createElement('form');
+      form.method = 'POST';
+      form.action = GAS_URL;
+      form.target = iframeName;
+      form.style.display = 'none';
+
+      Object.entries(fields).forEach(([name,value]) => {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = name;
+        input.value = String(value ?? '');
+        form.appendChild(input);
+      });
+
+      document.body.append(iframe, form);
+      let submitted = false;
+      const cleanup = () => setTimeout(() => { form.remove(); iframe.remove(); }, 1000);
+      iframe.addEventListener('load', () => {
+        if(!submitted) return;
+        cleanup();
+        resolve();
+      }, {once:true});
+      iframe.addEventListener('error', () => {
+        cleanup();
+        reject(new Error('post_failed'));
+      }, {once:true});
+      submitted = true;
+      form.submit();
+      setTimeout(() => { cleanup(); resolve(); }, 4000);
+    });
+  }
+
+  async function waitForAck(requestId){
+    const deadline = Date.now() + REQUEST_TIMEOUT_MS;
+    while(Date.now() < deadline){
+      const res = await jsonp({action:'ack', requestId}, 6000);
+      if(res && res.pending){
+        await new Promise(r => setTimeout(r, 350));
+        continue;
+      }
+      return res;
+    }
+    throw new Error('ack_timeout');
+  }
+
+  async function saveRemote(){
+    if(saveInFlight || !isDirty) return;
+    if(!isGasConfigured()){
+      setSyncStatus('error', 'GAS URL未設定');
+      return;
+    }
+
+    const payload = stablePayload();
+    if(payload === lastSavedPayload){
+      isDirty = false;
+      setSyncStatus('ok', '同期済み');
+      return;
+    }
+
+    saveInFlight = true;
+    setSyncStatus('saving', '同期中…');
+    const requestId = clientId + '_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,7);
+    try{
+      await postByHiddenForm({ action:'save', token:API_TOKEN, requestId, clientId, revision, payload });
+      const ack = await waitForAck(requestId);
+      if(!ack || !ack.ok) throw new Error(ack && ack.error ? ack.error : 'save_failed');
+      revision = Number(ack.revision || revision + 1);
+      lastSavedPayload = payload;
+      isDirty = stablePayload() !== payload;
+      cacheState();
+      setSyncStatus(isDirty ? 'saving' : 'ok', isDirty ? '未同期' : '同期済み');
+    }catch(e){
+      console.error('保存エラー', e);
+      setSyncStatus('error', '同期失敗');
+      toast('同期に失敗しました。通信状態を確認してください。');
+    }finally{
+      saveInFlight = false;
+      if(isDirty){
+        clearTimeout(saveTimer);
+        saveTimer = setTimeout(saveRemote, 900);
+      }
+    }
+  }
+
+  async function loadRemote({initial=false} = {}){
+    if(loadInFlight || saveInFlight || drag || activeStroke || isDirty) return;
+    if(!isGasConfigured()){
+      setSyncStatus('error', 'GAS URL未設定');
+      return;
+    }
+    loadInFlight = true;
+    if(initial) setSyncStatus('loading', '接続中…');
+    try{
+      const res = await jsonp({action:'load', clientId});
+      if(!res || !res.ok) throw new Error(res && res.error ? res.error : 'load_failed');
+      const remoteRevision = Number(res.revision || 0);
+      if(res.state && (initial || remoteRevision > revision)){
+        state = normalizeState(res.state);
+        revision = remoteRevision;
+        lastSavedPayload = stablePayload();
+        cacheState();
+        render();
+      }else if(initial && !res.state){
+        isDirty = true;
+        await saveRemote();
+      }
+      setSyncStatus('ok', '同期済み');
+    }catch(e){
+      console.error('読み込みエラー', e);
+      setSyncStatus('error', 'オフライン');
+      if(initial) toast('共通データを取得できないため、端末内の予備データを表示しています。');
+    }finally{
+      loadInFlight = false;
+    }
+  }
+
   function placedPersonIds(){
     return new Set(day().magnets.filter(m=>m.kind==='person').map(m=>m.personId));
   }
@@ -215,7 +436,7 @@
         if(confirm(`${p.name} を氏名一覧から削除しますか？`)){
           state.people = state.people.filter(x=>x.id!==p.id);
           Object.values(state.days).forEach(d=>{ if(Array.isArray(d.magnets)) d.magnets = d.magnets.filter(m=>m.personId!==p.id); });
-          saveSoon();
+          markChanged();
           render();
         }
       };
@@ -257,9 +478,7 @@
     });
   }
 
-  function renderCanvas(){
-    resizeDrawingCanvas();
-  }
+  function renderCanvas(){ resizeDrawingCanvas(); }
 
   function render(){
     renderPeople();
@@ -293,7 +512,7 @@
 
   function saveCanvasToState(){
     day().drawing = drawingCanvas.toDataURL('image/png');
-    saveSoon();
+    markChanged();
   }
 
   drawingCanvas.addEventListener('pointerdown', e=>{
@@ -301,10 +520,9 @@
     drawingCanvas.setPointerCapture(e.pointerId);
     const rect = drawingCanvas.getBoundingClientRect();
     const ctx = drawingCanvas.getContext('2d');
-    const lineWidth = mode==='erase' ? ERASER_WIDTH : PEN_WIDTH;
     ctx.globalCompositeOperation = mode==='erase' ? 'destination-out' : 'source-over';
     ctx.strokeStyle = '#111';
-    ctx.lineWidth = lineWidth;
+    ctx.lineWidth = mode==='erase' ? ERASER_WIDTH : PEN_WIDTH;
     ctx.beginPath();
     ctx.moveTo(e.clientX-rect.left, e.clientY-rect.top);
     activeStroke = { pointerId:e.pointerId, rect, ctx };
@@ -330,10 +548,10 @@
       e.preventDefault();
       e.stopPropagation();
       startDragFromElement(el, {
-        sourceType: el.dataset.type,
-        personId: el.dataset.id || null,
-        value: el.dataset.value || null,
-        fromMagnetId: null
+        sourceType:el.dataset.type,
+        personId:el.dataset.id || null,
+        value:el.dataset.value || null,
+        fromMagnetId:null
       }, e, true);
     };
   }
@@ -345,11 +563,8 @@
       const m = day().magnets.find(x=>x.id===el.dataset.magnetId);
       if(!m) return;
       startDragFromElement(el, {
-        sourceType: 'placed',
-        personId: m.personId || null,
-        value: m.value || null,
-        kind: m.kind,
-        fromMagnetId: m.id
+        sourceType:'placed', personId:m.personId || null, value:m.value || null,
+        kind:m.kind, fromMagnetId:m.id
       }, e, false);
     };
   }
@@ -362,163 +577,125 @@
     ghost.style.height = rect.height + 'px';
     ghost.style.minWidth = rect.width + 'px';
     ghost.style.minHeight = rect.height + 'px';
-    ghost.style.maxWidth = rect.width + 'px';
-    ghost.style.maxHeight = rect.height + 'px';
     document.body.append(ghost);
     drag = {
-      ...payload,
-      ghost,
-      dx: centerOnFirstDrop ? rect.width / 2 : e.clientX - rect.left,
-      dy: centerOnFirstDrop ? rect.height / 2 : e.clientY - rect.top,
-      pointerId: e.pointerId,
-      width: rect.width,
-      height: rect.height,
-      lastX: e.clientX,
-      lastY: e.clientY,
-      lastBoardPos: null
+      ...payload, ghost,
+      dx:centerOnFirstDrop ? rect.width/2 : e.clientX-rect.left,
+      dy:centerOnFirstDrop ? rect.height/2 : e.clientY-rect.top,
+      pointerId:e.pointerId, width:rect.width, height:rect.height,
+      lastX:e.clientX, lastY:e.clientY, lastBoardPos:null
     };
-    moveGhost(e.clientX, e.clientY);
+    moveGhost(e.clientX,e.clientY);
   }
 
   function moveGhost(x,y){
     if(!drag) return;
-    drag.ghost.style.left = (x - drag.dx) + 'px';
-    drag.ghost.style.top = (y - drag.dy) + 'px';
+    drag.ghost.style.left=(x-drag.dx)+'px';
+    drag.ghost.style.top=(y-drag.dy)+'px';
   }
-
   function pointInBoard(x,y){
-    const rect = boardSurface.getBoundingClientRect();
+    const rect=boardSurface.getBoundingClientRect();
     return x>=rect.left && x<=rect.right && y>=rect.top && y<=rect.bottom;
   }
-  function pointInTray(x,y){
-    return !!document.elementFromPoint(x,y)?.closest('.tray');
-  }
+  function pointInTray(x,y){ return !!document.elementFromPoint(x,y)?.closest('.tray'); }
   function boardPoint(x,y){
-    const rect = boardSurface.getBoundingClientRect();
-    let rx = x - rect.left - drag.dx;
-    let ry = y - rect.top - drag.dy;
-    rx = Math.max(0, Math.min(rx, rect.width - drag.width));
-    ry = Math.max(0, Math.min(ry, rect.height - drag.height));
-    return { x: Math.round(rx), y: Math.round(ry) };
+    const rect=boardSurface.getBoundingClientRect();
+    let rx=x-rect.left-drag.dx;
+    let ry=y-rect.top-drag.dy;
+    rx=Math.max(0,Math.min(rx,rect.width-drag.width));
+    ry=Math.max(0,Math.min(ry,rect.height-drag.height));
+    return {x:Math.round(rx),y:Math.round(ry)};
   }
 
-  document.addEventListener('pointermove', e=>{
+  document.addEventListener('pointermove',e=>{
     if(!drag) return;
-    drag.lastX = e.clientX;
-    drag.lastY = e.clientY;
-    moveGhost(e.clientX, e.clientY);
-    drag.lastBoardPos = pointInBoard(e.clientX, e.clientY) ? boardPoint(e.clientX, e.clientY) : null;
-  }, {passive:false});
+    drag.lastX=e.clientX; drag.lastY=e.clientY;
+    moveGhost(e.clientX,e.clientY);
+    drag.lastBoardPos=pointInBoard(e.clientX,e.clientY)?boardPoint(e.clientX,e.clientY):null;
+  },{passive:false});
 
-  document.addEventListener('pointerup', e=>{
+  document.addEventListener('pointerup',e=>{
     if(!drag) return;
-    const dropX = Number.isFinite(e.clientX) ? e.clientX : drag.lastX;
-    const dropY = Number.isFinite(e.clientY) ? e.clientY : drag.lastY;
-    const pos = drag.lastBoardPos || (pointInBoard(dropX, dropY) ? boardPoint(dropX, dropY) : null);
-    if(pos){
-      placeMagnetAt(pos);
-    } else if(pointInTray(dropX, dropY)){
-      returnMagnetToTray();
-    }
-    drag.ghost.remove();
-    drag = null;
+    const currentDrag=drag;
+    const dropX=Number.isFinite(e.clientX)?e.clientX:drag.lastX;
+    const dropY=Number.isFinite(e.clientY)?e.clientY:drag.lastY;
+    const pos=drag.lastBoardPos || (pointInBoard(dropX,dropY)?boardPoint(dropX,dropY):null);
+    if(pos) placeMagnetAt(pos);
+    else if(pointInTray(dropX,dropY)) returnMagnetToTray();
+    currentDrag.ghost.remove();
+    drag=null;
     render();
-    saveSoon();
+    markChanged();
   });
 
   function placeMagnetAt(pos){
-    if(drag.sourceType === 'placed'){
-      const m = day().magnets.find(x=>x.id===drag.fromMagnetId);
-      if(m){
-        m.x = pos.x;
-        m.y = pos.y;
-      }
+    if(drag.sourceType==='placed'){
+      const m=day().magnets.find(x=>x.id===drag.fromMagnetId);
+      if(m){m.x=pos.x;m.y=pos.y;}
       return;
     }
-    if(drag.sourceType === 'person'){
-      day().magnets = day().magnets.filter(m=>!(m.kind==='person' && m.personId===drag.personId));
-      day().magnets.push({
-        id:'m'+Date.now()+Math.random().toString(16).slice(2),
-        kind:'person',
-        personId:drag.personId,
-        x:pos.x,
-        y:pos.y
-      });
+    if(drag.sourceType==='person'){
+      day().magnets=day().magnets.filter(m=>!(m.kind==='person'&&m.personId===drag.personId));
+      day().magnets.push({id:'m'+Date.now()+Math.random().toString(16).slice(2),kind:'person',personId:drag.personId,x:pos.x,y:pos.y});
       return;
     }
-    if(drag.sourceType === 'status'){
-      day().magnets.push({
-        id:'m'+Date.now()+Math.random().toString(16).slice(2),
-        kind:'status',
-        value:drag.value,
-        x:pos.x,
-        y:pos.y
-      });
+    if(drag.sourceType==='status'){
+      day().magnets.push({id:'m'+Date.now()+Math.random().toString(16).slice(2),kind:'status',value:drag.value,x:pos.x,y:pos.y});
     }
   }
 
   function returnMagnetToTray(){
-    if(drag.sourceType === 'placed'){
-      day().magnets = day().magnets.filter(m=>m.id !== drag.fromMagnetId);
-    }
+    if(drag.sourceType==='placed') day().magnets=day().magnets.filter(m=>m.id!==drag.fromMagnetId);
   }
 
   function setMode(m){
-    mode = m;
-    $('#eraseBtn').classList.toggle('active', m==='erase');
-    toast(m==='erase' ? '消しゴムモード' : '手書きモード');
+    mode=m;
+    $('#eraseBtn').classList.toggle('active',m==='erase');
+    toast(m==='erase'?'消しゴムモード':'手書きモード');
   }
 
-  $('#eraseBtn').onclick = ()=> setMode(mode==='erase' ? 'pen' : 'erase');
-  $('#undoBtn').onclick = ()=>{
-    if(day().drawing){
-      clearDrawingCanvas();
-      toast('手書きを消しました');
-    } else {
-      toast('消せる手書きがありません');
-    }
+  $('#eraseBtn').onclick=()=>setMode(mode==='erase'?'pen':'erase');
+  $('#undoBtn').onclick=()=>{
+    if(day().drawing){clearDrawingCanvas();toast('手書きを消しました');}
+    else toast('消せる手書きがありません');
   };
+
   function clearDrawingCanvas(){
-    const ctx = drawingCanvas.getContext('2d');
+    const ctx=drawingCanvas.getContext('2d');
     ctx.save();
     ctx.setTransform(1,0,0,1,0,0);
-    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalCompositeOperation='source-over';
     ctx.clearRect(0,0,drawingCanvas.width,drawingCanvas.height);
     ctx.restore();
-    day().drawing = null;
-    saveSoon();
+    day().drawing=null;
+    markChanged();
   }
 
-  $('#clearDrawingBtn').onclick = ()=>{
+  $('#clearDrawingBtn').onclick=()=>{
     if(confirm('手書きした内容をすべて消去しますか？\nマグネットの配置と氏名一覧は残ります。')){
-      clearDrawingCanvas();
-      setMode('pen');
-      toast('手書き分をすべて消去しました');
+      clearDrawingCanvas(); setMode('pen'); toast('手書き分をすべて消去しました');
     }
   };
 
-  $('#resetPeopleBtn').onclick = ()=>{
-    day().magnets = day().magnets.filter(m=>m.kind!=='person');
-    saveSoon();
-    render();
+  $('#resetPeopleBtn').onclick=()=>{
+    day().magnets=day().magnets.filter(m=>m.kind!=='person');
+    markChanged(); render();
   };
 
-  $('#addPersonBtn').onclick = ()=>{
-    modal.classList.add('show');
-    $('#personName').value='';
+  $('#addPersonBtn').onclick=()=>{
+    modal.classList.add('show'); $('#personName').value='';
     setTimeout(()=>$('#personName').focus(),50);
   };
   document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>modal.classList.remove('show'));
-  $('#savePersonBtn').onclick = ()=>{
-    const name = $('#personName').value.trim();
+  $('#savePersonBtn').onclick=()=>{
+    const name=$('#personName').value.trim();
     if(!name) return;
-    state.people.push({id:'p'+Date.now(), name});
-    modal.classList.remove('show');
-    saveSoon();
-    render();
+    state.people.push({id:'p'+Date.now()+Math.random().toString(36).slice(2,6),name});
+    modal.classList.remove('show'); markChanged(); render();
   };
+  $('#personName').addEventListener('keydown',e=>{if(e.key==='Enter')$('#savePersonBtn').click();});
 
-  $('#fullBtn').onclick = async()=>{
+  $('#fullBtn').onclick=async()=>{
     try{
       if(!document.fullscreenElement) await document.documentElement.requestFullscreen();
       else await document.exitFullscreen();
@@ -526,17 +703,25 @@
   };
 
   document.querySelectorAll('.magnet-box .status-chip').forEach(attachTrayDrag);
-  window.addEventListener('resize', ()=> renderCanvas());
-  document.addEventListener('dblclick', e=>{
-    const chip = e.target.closest('.floating-chip');
+  window.addEventListener('resize',()=>renderCanvas());
+  document.addEventListener('visibilitychange',()=>{
+    if(document.visibilityState==='visible') loadRemote();
+  });
+  window.addEventListener('beforeunload',()=>{
+    if(isDirty) saveRemote();
+  });
+  document.addEventListener('dblclick',e=>{
+    const chip=e.target.closest('.floating-chip');
     if(!chip) return;
-    day().magnets = day().magnets.filter(m=>m.id !== chip.dataset.magnetId);
-    saveSoon();
-    render();
+    day().magnets=day().magnets.filter(m=>m.id!==chip.dataset.magnetId);
+    markChanged(); render();
   });
 
   render();
+  loadRemote({initial:true});
+  pollTimer=setInterval(()=>loadRemote(),POLL_INTERVAL_MS);
 })();
 </script>
+
 </body>
 </html>
