@@ -478,7 +478,10 @@
     });
   }
 
-  function renderCanvas(){ resizeDrawingCanvas(); }
+  function renderCanvas(){
+    resizeDrawingCanvas();
+    redrawDrawingFromState();
+  }
 
   function render(){
     renderPeople();
@@ -487,27 +490,53 @@
     renderCanvas();
   }
 
+  function configureDrawingContext(){
+    const ratio = Math.max(1, window.devicePixelRatio || 1);
+    const ctx = drawingCanvas.getContext('2d');
+    ctx.setTransform(ratio,0,0,ratio,0,0);
+    ctx.lineCap='round';
+    ctx.lineJoin='round';
+    return ctx;
+  }
+
   function resizeDrawingCanvas(){
     const rect = boardSurface.getBoundingClientRect();
     const ratio = Math.max(1, window.devicePixelRatio || 1);
-    const needW = Math.round(rect.width * ratio);
-    const needH = Math.round(rect.height * ratio);
+    const needW = Math.max(1, Math.round(rect.width * ratio));
+    const needH = Math.max(1, Math.round(rect.height * ratio));
+    drawingCanvas.style.width = rect.width + 'px';
+    drawingCanvas.style.height = rect.height + 'px';
     if(drawingCanvas.width !== needW || drawingCanvas.height !== needH){
-      const old = day().drawing;
       drawingCanvas.width = needW;
       drawingCanvas.height = needH;
-      drawingCanvas.style.width = rect.width + 'px';
-      drawingCanvas.style.height = rect.height + 'px';
-      const ctx = drawingCanvas.getContext('2d');
-      ctx.setTransform(ratio,0,0,ratio,0,0);
-      ctx.lineCap='round';
-      ctx.lineJoin='round';
-      if(old){
-        const img = new Image();
-        img.onload = ()=>ctx.drawImage(img,0,0,rect.width,rect.height);
-        img.src = old;
-      }
     }
+    configureDrawingContext();
+  }
+
+  function redrawDrawingFromState(){
+    const sequence = ++canvasRenderSequence;
+    const rect = drawingCanvas.getBoundingClientRect();
+    const ctx = configureDrawingContext();
+
+    ctx.save();
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.clearRect(0,0,drawingCanvas.width,drawingCanvas.height);
+    ctx.restore();
+
+    const drawing = day().drawing;
+    if(!drawing) return;
+
+    const img = new Image();
+    img.onload = () => {
+      if(sequence !== canvasRenderSequence || day().drawing !== drawing) return;
+      const latestRect = drawingCanvas.getBoundingClientRect();
+      const latestCtx = configureDrawingContext();
+      latestCtx.globalCompositeOperation = 'source-over';
+      latestCtx.drawImage(img,0,0,latestRect.width,latestRect.height);
+    };
+    img.onerror = () => console.error('手書き画像の再描画に失敗しました。');
+    img.src = drawing;
   }
 
   function saveCanvasToState(){
