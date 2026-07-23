@@ -36,8 +36,6 @@
   .btn.active{background:#102a43;color:#fff;border-color:#102a43}
   .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
   .btn.danger{background:#fff2f2;color:#9c1818;border-color:#e0abab}
-  .pen-size{display:flex;align-items:center;gap:4px;border:1px solid #b7c3ca;border-radius:10px;padding:4px 7px;background:#fff}
-  .pen-size input{width:80px}
   .layout{min-height:0;flex:1;display:grid;grid-template-columns:minmax(170px,22vw) 1fr;gap:8px}
   .tray{min-height:0;background:var(--panel);border-radius:14px;box-shadow:var(--shadow);display:flex;flex-direction:column;overflow:hidden}
   .tray-head{padding:10px;border-bottom:1px solid #cbd5da;font-weight:900;font-size:18px}
@@ -90,15 +88,11 @@
 <body>
 <div id="app">
   <header class="topbar">
-    <div class="datebox"><input id="boardDate" type="date" aria-label="日付"></div>
     <div class="title">SCHEDULE BOARD</div>
     <div class="tool-group">
       <button class="btn" id="eraseBtn">⌫ 消しゴムON/OFF</button>
-      <div class="pen-size" title="ペン太さ"><span>太さ</span><input id="penSize" type="range" min="2" max="18" value="5"></div>
-      <button class="btn" id="undoBtn">↶ 戻す</button>
-      <button class="btn danger" id="clearDayBtn">本日分を消去</button>
-      <button class="btn" id="backupBtn">保存</button>
-      <button class="btn" id="restoreBtn">読込</button>
+            <button class="btn" id="undoBtn">↶ 戻す</button>
+      <button class="btn danger" id="clearDrawingBtn">手書き分を全消去</button>
       <button class="btn primary" id="fullBtn">全画面</button>
     </div>
   </header>
@@ -139,7 +133,6 @@
     <div class="dialog-actions"><button class="btn" data-close>キャンセル</button><button class="btn primary" id="savePersonBtn">追加</button></div>
   </div>
 </div>
-<input type="file" id="restoreFile" accept="application/json" hidden>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -147,20 +140,17 @@
   'use strict';
   const ROW_COUNT = 16;
   const KEY = 'hirox_schedule_board_v4';
-  const today = new Date();
-  const pad = n => String(n).padStart(2,'0');
-  const ymd = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
   const defaultPeople = [];
+  const PEN_WIDTH = 5;
+  const ERASER_WIDTH = 58;
 
   const $ = s => document.querySelector(s);
   const rowsEl = $('#rows');
-  const dateEl = $('#boardDate');
   const peopleList = $('#peopleList');
   const modal = $('#personModal');
   const boardSurface = $('#boardSurface');
   const drawingCanvas = $('#drawingCanvas');
   const floatingLayer = $('#floatingLayer');
-  dateEl.value = ymd(today);
 
   let state = loadState();
   let mode = 'pen';
@@ -179,8 +169,12 @@
     return { people: defaultPeople.map((name,i)=>({id:'p'+Date.now()+i,name})), days:{} };
   }
   function day(){
-    const k = dateEl.value || ymd(today);
-    if(!state.days[k]) state.days[k] = emptyDay();
+    const k = 'board';
+    if(!state.days[k]){
+      const previousKeys = Object.keys(state.days).filter(key=>key!=='board');
+      const sourceKey = previousKeys.sort().reverse()[0];
+      state.days[k] = sourceKey ? state.days[sourceKey] : emptyDay();
+    }
     if(!Array.isArray(state.days[k].magnets)) state.days[k].magnets = [];
     if(!('drawing' in state.days[k])) state.days[k].drawing = null;
     return state.days[k];
@@ -306,7 +300,7 @@
     drawingCanvas.setPointerCapture(e.pointerId);
     const rect = drawingCanvas.getBoundingClientRect();
     const ctx = drawingCanvas.getContext('2d');
-    const lineWidth = mode==='erase' ? Number($('#penSize').value) * 3 : Number($('#penSize').value);
+    const lineWidth = mode==='erase' ? ERASER_WIDTH : PEN_WIDTH;
     ctx.globalCompositeOperation = mode==='erase' ? 'destination-out' : 'source-over';
     ctx.strokeStyle = '#111';
     ctx.lineWidth = lineWidth;
@@ -477,24 +471,28 @@
   $('#eraseBtn').onclick = ()=> setMode(mode==='erase' ? 'pen' : 'erase');
   $('#undoBtn').onclick = ()=>{
     if(day().drawing){
-      day().drawing = null;
-      saveSoon();
-      renderCanvas();
+      clearDrawingCanvas();
       toast('手書きを消しました');
     } else {
       toast('消せる手書きがありません');
     }
   };
-  dateEl.onchange = ()=>{
-    setMode('pen');
-    render();
-  };
+  function clearDrawingCanvas(){
+    const ctx = drawingCanvas.getContext('2d');
+    ctx.save();
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.clearRect(0,0,drawingCanvas.width,drawingCanvas.height);
+    ctx.restore();
+    day().drawing = null;
+    saveSoon();
+  }
 
-  $('#clearDayBtn').onclick = ()=>{
-    if(confirm(`${dateEl.value} の配置・手書きをすべて消去しますか？`)){
-      state.days[dateEl.value] = emptyDay();
-      saveSoon();
-      render();
+  $('#clearDrawingBtn').onclick = ()=>{
+    if(confirm('手書きした内容をすべて消去しますか？\nマグネットの配置と氏名一覧は残ります。')){
+      clearDrawingCanvas();
+      setMode('pen');
+      toast('手書き分をすべて消去しました');
     }
   };
 
@@ -519,31 +517,6 @@
     render();
   };
 
-  $('#backupBtn').onclick = ()=>{
-    const blob = new Blob([JSON.stringify(state,null,2)], {type:'application/json'});
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `schedule-board-backup_${dateEl.value}.json`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-    toast('バックアップを保存しました');
-  };
-  $('#restoreBtn').onclick = ()=> $('#restoreFile').click();
-  $('#restoreFile').onchange = async e=>{
-    const f = e.target.files[0];
-    if(!f) return;
-    try{
-      const obj = JSON.parse(await f.text());
-      if(!obj.people || !obj.days) throw new Error();
-      state = obj;
-      saveSoon();
-      render();
-      toast('バックアップを読み込みました');
-    }catch(err){
-      alert('読み込みに失敗しました。正しいバックアップファイルを選択してください。');
-    }
-    e.target.value='';
-  };
   $('#fullBtn').onclick = async()=>{
     try{
       if(!document.fullscreenElement) await document.documentElement.requestFullscreen();
