@@ -98,7 +98,7 @@
       <button class="btn" id="eraseBtn">⌫ 消しゴムON/OFF</button>
             <button class="btn" id="undoBtn">↶ 戻す</button>
       <button class="btn danger" id="clearDrawingBtn">手書き分を全消去</button>
-      <span id="syncBadge" class="sync-badge loading">接続中…</span>
+      <span id="syncBadge" class="sync-badge">端末データ表示</span>
       <button class="btn primary" id="fullBtn">全画面</button>
     </div>
   </header>
@@ -146,15 +146,15 @@
   'use strict';
 
   /* GASをウェブアプリとしてデプロイ後、発行URLに置き換えてください。 */
-  const GAS_URL = 'https://script.google.com/macros/s/AKfycbz9474WUW1UHMPayGhFyh_I-ijQLLezjaEfDv0tXCBwFO5yJEVSBaSKQCQ4XUgB6klgSQ/exec';
+  const GAS_URL = 'https://script.google.com/macros/s/AKfycbx1WLt_mAbN9zyQcFrdRzb0yxe1QlJMJ7HC257gc4wdnV0rXeC5smlZDFyg0RtevwvaMA/exec';
   const API_TOKEN = 'hirox';
   const ROW_COUNT = 16;
-  const CACHE_KEY = 'hirox_schedule_board_shared_cache_v1';
+  const CACHE_KEY = 'hirox_schedule_board_shared_cache_vector_v1';
   const PEN_WIDTH = 5;
   const ERASER_WIDTH = 58;
-  const POLL_INTERVAL_MS = 5000;
+  const POLL_INTERVAL_MS = 10000;
   const SAVE_DEBOUNCE_MS = 450;
-  const REQUEST_TIMEOUT_MS = 30000;
+  const REQUEST_TIMEOUT_MS = 8000;
 
   const $ = s => document.querySelector(s);
   const rowsEl = $('#rows');
@@ -167,7 +167,6 @@
 
   let state = loadCachedState();
   let revision = 0;
-  let drawingRevision = 0;
   let mode = 'pen';
   let drag = null;
   let activeStroke = null;
@@ -180,7 +179,7 @@
   let clientId = getClientId();
 
   function emptyDay(){
-    return { drawing:null, magnets:[] };
+    return { strokes:[], magnets:[] };
   }
 
   function defaultState(){
@@ -193,7 +192,8 @@
     if(!safe.days || typeof safe.days !== 'object') safe.days = {};
     if(!safe.days.board || typeof safe.days.board !== 'object') safe.days.board = emptyDay();
     if(!Array.isArray(safe.days.board.magnets)) safe.days.board.magnets = [];
-    if(!('drawing' in safe.days.board)) safe.days.board.drawing = null;
+    if(!Array.isArray(safe.days.board.strokes)) safe.days.board.strokes = [];
+    if('drawing' in safe.days.board) delete safe.days.board.drawing;
     return safe;
   }
 
@@ -363,7 +363,6 @@
       const ack = await waitForAck(requestId);
       if(!ack || !ack.ok) throw new Error(ack && ack.error ? ack.error : 'save_failed');
       revision = Number(ack.revision || revision + 1);
-      if(ack.drawing) drawingRevision = Number(ack.drawing.revision || drawingRevision);
       lastSavedPayload = payload;
       isDirty = stablePayload() !== payload;
       cacheState();
@@ -381,22 +380,6 @@
     }
   }
 
-  function applyRemoteDrawing(drawing, meta){
-    const info = meta && typeof meta === 'object' ? meta : {};
-    const remoteDrawingRevision = Number(info.revision || 0);
-    const expectedLength = Number(info.length || 0);
-    const value = drawing ? String(drawing) : '';
-
-    if(value && !/^data:image\/png;base64,/.test(value)){
-      throw new Error('drawing_format_invalid');
-    }
-    if(expectedLength && value.length !== expectedLength){
-      throw new Error('drawing_length_mismatch');
-    }
-    day().drawing = value || null;
-    drawingRevision = remoteDrawingRevision;
-  }
-
   async function loadRemote({initial=false} = {}){
     if(loadInFlight || saveInFlight || drag || activeStroke || isDirty) return;
     if(!isGasConfigured()){
@@ -404,27 +387,26 @@
       return;
     }
     loadInFlight = true;
-    if(initial) setSyncStatus('loading', '接続中…');
+    if(initial) setSyncStatus('loading', '同期確認中…');
     try{
       const res = await jsonp({action:'load', clientId}, REQUEST_TIMEOUT_MS);
       if(!res || !res.ok) throw new Error(res && res.error ? res.error : 'load_failed');
       const remoteRevision = Number(res.revision || 0);
       if(res.state && (initial || remoteRevision > revision)){
         state = normalizeState(res.state);
-        applyRemoteDrawing(res.drawingData || '', res.drawing);
         revision = remoteRevision;
         lastSavedPayload = stablePayload();
         cacheState();
         render();
       }else if(initial && !res.state){
         isDirty = true;
-        await saveRemote();
+        saveRemote();
       }
       setSyncStatus('ok', '同期済み');
     }catch(e){
       console.error('読み込みエラー', e);
-      setSyncStatus('error', '読込失敗');
-      if(initial) toast('共通データを取得できないため、端末内の予備データを表示しています。');
+      setSyncStatus('error', '再試行待ち');
+      if(initial) toast('端末内データを表示中です。同期は自動で再試行します。');
     }finally{
       loadInFlight = false;
     }
@@ -532,61 +514,65 @@
     configureDrawingContext();
   }
 
-  function redrawDrawingFromState(){
-    const sequence = ++canvasRenderSequence;
+  function drawStroke(ctx, stroke){
+    if(!stroke || !Array.isArray(stroke.points) || stroke.points.length < 1) return;
     const rect = drawingCanvas.getBoundingClientRect();
-    const ctx = configureDrawingContext();
+    ctx.globalCompositeOperation = stroke.tool === 'erase' ? 'destination-out' : 'source-over';
+    ctx.strokeStyle = '#111';
+    ctx.lineWidth = Number(stroke.width || (stroke.tool === 'erase' ? ERASER_WIDTH : PEN_WIDTH));
+    ctx.beginPath();
+    const first = stroke.points[0];
+    ctx.moveTo(first[0] * rect.width, first[1] * rect.height);
+    for(let i=1;i<stroke.points.length;i++){
+      const p = stroke.points[i];
+      ctx.lineTo(p[0] * rect.width, p[1] * rect.height);
+    }
+    if(stroke.points.length === 1) ctx.lineTo(first[0] * rect.width + 0.1, first[1] * rect.height + 0.1);
+    ctx.stroke();
+  }
 
+  function redrawDrawingFromState(){
+    const ctx = configureDrawingContext();
     ctx.save();
     ctx.setTransform(1,0,0,1,0,0);
     ctx.globalCompositeOperation = 'source-over';
     ctx.clearRect(0,0,drawingCanvas.width,drawingCanvas.height);
     ctx.restore();
-
-    const drawing = day().drawing;
-    if(!drawing) return;
-
-    const img = new Image();
-    img.onload = () => {
-      if(sequence !== canvasRenderSequence || day().drawing !== drawing) return;
-      const latestRect = drawingCanvas.getBoundingClientRect();
-      const latestCtx = configureDrawingContext();
-      latestCtx.globalCompositeOperation = 'source-over';
-      latestCtx.drawImage(img,0,0,latestRect.width,latestRect.height);
-    };
-    img.onerror = () => console.error('手書き画像の再描画に失敗しました。');
-    img.src = drawing;
-  }
-
-  function saveCanvasToState(){
-    day().drawing = drawingCanvas.toDataURL('image/png');
-    markChanged();
+    day().strokes.forEach(stroke => drawStroke(ctx, stroke));
+    ctx.globalCompositeOperation = 'source-over';
   }
 
   drawingCanvas.addEventListener('pointerdown', e=>{
     if(drag) return;
     drawingCanvas.setPointerCapture(e.pointerId);
     const rect = drawingCanvas.getBoundingClientRect();
-    const ctx = drawingCanvas.getContext('2d');
-    ctx.globalCompositeOperation = mode==='erase' ? 'destination-out' : 'source-over';
-    ctx.strokeStyle = '#111';
-    ctx.lineWidth = mode==='erase' ? ERASER_WIDTH : PEN_WIDTH;
-    ctx.beginPath();
-    ctx.moveTo(e.clientX-rect.left, e.clientY-rect.top);
-    activeStroke = { pointerId:e.pointerId, rect, ctx };
+    const point = [(e.clientX-rect.left)/rect.width, (e.clientY-rect.top)/rect.height];
+    activeStroke = {
+      pointerId:e.pointerId,
+      stroke:{ tool:mode, width:mode==='erase'?ERASER_WIDTH:PEN_WIDTH, points:[point] }
+    };
+    const ctx = configureDrawingContext();
+    drawStroke(ctx, activeStroke.stroke);
     e.preventDefault();
   });
   drawingCanvas.addEventListener('pointermove', e=>{
     if(!activeStroke || activeStroke.pointerId !== e.pointerId) return;
-    const {ctx, rect} = activeStroke;
-    ctx.lineTo(e.clientX-rect.left, e.clientY-rect.top);
-    ctx.stroke();
+    const rect = drawingCanvas.getBoundingClientRect();
+    const point = [(e.clientX-rect.left)/rect.width, (e.clientY-rect.top)/rect.height];
+    const points = activeStroke.stroke.points;
+    const prev = points[points.length-1];
+    if(Math.abs(point[0]-prev[0]) + Math.abs(point[1]-prev[1]) < 0.0015) return;
+    points.push(point);
+    redrawDrawingFromState();
+    drawStroke(configureDrawingContext(), activeStroke.stroke);
     e.preventDefault();
   });
   const finishStroke = e => {
     if(!activeStroke || activeStroke.pointerId !== e.pointerId) return;
+    day().strokes.push(activeStroke.stroke);
     activeStroke = null;
-    saveCanvasToState();
+    markChanged();
+    redrawDrawingFromState();
   };
   drawingCanvas.addEventListener('pointerup', finishStroke);
   drawingCanvas.addEventListener('pointercancel', finishStroke);
@@ -704,18 +690,13 @@
 
   $('#eraseBtn').onclick=()=>setMode(mode==='erase'?'pen':'erase');
   $('#undoBtn').onclick=()=>{
-    if(day().drawing){clearDrawingCanvas();toast('手書きを消しました');}
-    else toast('消せる手書きがありません');
+    if(day().strokes.length){day().strokes.pop();markChanged();redrawDrawingFromState();toast('1つ前の手書きを戻しました');}
+    else toast('戻せる手書きがありません');
   };
 
   function clearDrawingCanvas(){
-    const ctx=drawingCanvas.getContext('2d');
-    ctx.save();
-    ctx.setTransform(1,0,0,1,0,0);
-    ctx.globalCompositeOperation='source-over';
-    ctx.clearRect(0,0,drawingCanvas.width,drawingCanvas.height);
-    ctx.restore();
-    day().drawing=null;
+    day().strokes=[];
+    redrawDrawingFromState();
     markChanged();
   }
 
@@ -765,8 +746,11 @@
     markChanged(); render();
   });
 
+  syncBadge.title='クリックすると同期を再試行します';
+  syncBadge.style.cursor='pointer';
+  syncBadge.onclick=()=>loadRemote({initial:true});
   render();
-  loadRemote({initial:true});
+  setTimeout(()=>loadRemote({initial:true}), 50);
   pollTimer=setInterval(()=>loadRemote(),POLL_INTERVAL_MS);
 })();
 </script>
