@@ -48,9 +48,20 @@
   .status-chip{width:var(--status-magnet-w);height:var(--status-magnet-h);min-width:var(--status-magnet-w);min-height:var(--status-magnet-h);padding:9px 8px;font-size:clamp(16px,1.5vw,22px);color:#111;font-weight:900;white-space:nowrap;flex:none}
   .status-direct,.status-return{background:#8fc6ff}
   .status-trip{background:#ffe26a}
+  .status-floor{background:linear-gradient(#dff7df,#a9dda9);border-color:#5f9f68;color:#153f1c}
   .name-chip:hover,.status-chip:hover,.floating-chip:hover{filter:brightness(.98);box-shadow:0 6px 14px rgba(0,0,0,.22)}
   .tiny{border:0;background:transparent;font-size:16px;padding:4px;cursor:pointer}
   .magnet-box{padding:5px;border-top:1px solid #cbd5da;display:flex;flex-direction:column;align-items:center;gap:5px}
+  .floor-picker{width:100%;display:flex;flex-direction:column;align-items:center;gap:5px;margin-top:2px}
+  .floor-picker-toggle{width:var(--status-magnet-w);min-height:42px;border:2px solid #5f9f68;border-radius:9px;background:linear-gradient(#f4fff4,#d6efd8);color:#194b20;font-weight:950;font-size:14px;cursor:pointer;touch-action:manipulation;box-shadow:0 3px 8px rgba(0,0,0,.14);display:flex;align-items:center;justify-content:center;gap:4px}
+  .floor-picker-toggle::after{content:'▼';font-size:11px;transition:transform .15s}
+  .floor-picker.open .floor-picker-toggle::after{transform:rotate(180deg)}
+  .floor-picker-toggle:active{transform:scale(.97)}
+  .floor-options{display:none;width:100%;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;padding:6px;border:1px solid #a8c8ad;border-radius:10px;background:#f3fbf4;box-shadow:0 5px 14px rgba(0,0,0,.14)}
+  .floor-picker.open .floor-options{display:grid}
+  .floor-options .status-chip{width:100%;min-width:0;height:46px;min-height:46px;font-size:18px}
+  .floor-options .status-chip:last-child{grid-column:1 / -1;width:50%;justify-self:center}
+  .floor-hint{font-size:11px;font-weight:800;color:#52705a;text-align:center;line-height:1.25}
   .board-wrap{min-width:0;min-height:0;background:var(--board);border-radius:14px;box-shadow:var(--shadow);overflow:auto;position:relative}
   .board{min-width:760px;padding:10px 14px 18px}
   .board-title{position:relative;border-bottom:3px solid var(--line-strong);padding:4px 8px 8px;background:var(--board);cursor:pointer;user-select:none;-webkit-user-select:none;touch-action:manipulation;transition:background .16s,border-color .16s,color .16s,box-shadow .16s}
@@ -98,6 +109,25 @@
   .mode-banner.show{display:block}
   .eraser-cursor{display:none;position:absolute;z-index:17;width:58px;height:58px;border:3px solid #e05f00;border-radius:50%;background:rgba(255,145,42,.17);box-shadow:0 0 0 3px rgba(255,255,255,.86),0 3px 10px rgba(0,0,0,.2);pointer-events:none;transform:translate(-50%,-50%)}
   .eraser-cursor.show{display:block}
+  .mobile-view-badge{display:none;align-items:center;justify-content:center;min-height:36px;padding:6px 10px;border-radius:999px;background:#e8f3ff;color:#155a91;border:1px solid #8bb9df;font-size:13px;font-weight:950;white-space:nowrap}
+  body.mobile-view-only .mobile-view-badge{display:inline-flex}
+  body.mobile-view-only .eraser-mode-mark,
+  body.mobile-view-only #undoBtn,
+  body.mobile-view-only #clearDrawingBtn,
+  body.mobile-view-only .tray-actions,
+  body.mobile-view-only .magnet-box,
+  body.mobile-view-only .tiny{display:none!important}
+  body.mobile-view-only .board-title{cursor:default;touch-action:auto}
+  body.mobile-view-only .board-title::after{content:"スマートフォン閲覧モード｜指で上下左右に動かせます"}
+  body.mobile-view-only .drawing-canvas{pointer-events:none!important;touch-action:auto!important;cursor:default!important}
+  body.mobile-view-only .floating-chip{pointer-events:none!important;touch-action:auto!important;cursor:default!important}
+  body.mobile-view-only .board-wrap{overflow:auto;-webkit-overflow-scrolling:touch;touch-action:pan-x pan-y;overscroll-behavior:contain}
+  body.mobile-view-only .board{min-width:980px}
+  body.mobile-view-only .layout{grid-template-columns:118px minmax(0,1fr)}
+  body.mobile-view-only .tray{pointer-events:none}
+  body.mobile-view-only .tray-list{overflow:hidden}
+  body.mobile-view-only .mode-banner,
+  body.mobile-view-only .eraser-cursor{display:none!important}
   @media (max-width:900px){
     .layout{grid-template-columns:140px minmax(0,1fr)}
     .title{font-size:clamp(17px,3.5vw,24px)}
@@ -115,6 +145,7 @@
   <header class="topbar">
     <div class="title">SCHEDULE BOARD</div>
     <div id="eraserModeMark" class="eraser-mode-mark" role="button" tabindex="0" aria-pressed="false" aria-label="消しゴムモードに切り替える">黒板消し</div>
+    <span id="mobileViewBadge" class="mobile-view-badge">閲覧専用・指で移動</span>
     <div class="tool-group" aria-label="操作メニュー">
       <button class="btn" id="undoBtn" title="1つ前の手書きを戻す" aria-label="戻す">↶ 戻す</button>
       <button class="btn danger" id="clearDrawingBtn" title="手書きをすべて消去" aria-label="手書きを全消去">🗑 全消去</button>
@@ -135,6 +166,17 @@
         <div class="status-chip status-direct" data-type="status" data-value="直行">直行</div>
         <div class="status-chip status-return" data-type="status" data-value="直帰">直帰</div>
         <div class="status-chip status-trip" data-type="status" data-value="出張">出張</div>
+        <div id="floorPicker" class="floor-picker">
+          <button id="floorPickerToggle" class="floor-picker-toggle" type="button" aria-expanded="false">階を選ぶ</button>
+          <div id="floorOptions" class="floor-options" aria-label="階マグネット">
+            <div class="status-chip status-floor" data-type="status" data-value="1F">1F</div>
+            <div class="status-chip status-floor" data-type="status" data-value="3F">3F</div>
+            <div class="status-chip status-floor" data-type="status" data-value="4F">4F</div>
+            <div class="status-chip status-floor" data-type="status" data-value="5F">5F</div>
+            <div class="status-chip status-floor" data-type="status" data-value="6F">6F</div>
+            <div class="floor-hint">必要な時だけ展開します</div>
+          </div>
+        </div>
       </div>
     </aside>
 
@@ -178,6 +220,12 @@
   const SAVE_DEBOUNCE_MS = 160;
   const REQUEST_TIMEOUT_MS = 7000;
   const ACK_POLL_MS = 120;
+  const MOBILE_VIEW_ONLY = (() => {
+    const uaMobile = navigator.userAgentData ? navigator.userAgentData.mobile : /Android|iPhone|iPod|Mobile/i.test(navigator.userAgent);
+    const coarse = window.matchMedia ? window.matchMedia('(pointer: coarse)').matches : ('ontouchstart' in window);
+    const shortSide = Math.min(window.screen?.width || innerWidth, window.screen?.height || innerHeight);
+    return Boolean(uaMobile && coarse && shortSide <= 820);
+  })();
 
   const $ = s => document.querySelector(s);
   const rowsEl = $('#rows');
@@ -187,11 +235,18 @@
   const drawingCanvas = $('#drawingCanvas');
   const floatingLayer = $('#floatingLayer');
   const syncBadge = $('#syncBadge');
+  const floorPicker = $('#floorPicker');
+  const floorPickerToggle = $('#floorPickerToggle');
   const modeToggle = $('#modeToggle');
   const modeTitle = $('#modeTitle');
   const modeBanner = $('#modeBanner');
   const eraserCursor = $('#eraserCursor');
   const eraserModeMark = $('#eraserModeMark');
+
+  if(MOBILE_VIEW_ONLY){
+    document.body.classList.add('mobile-view-only');
+    document.documentElement.classList.add('mobile-view-only');
+  }
 
   let state = loadCachedState();
   let revision = 0;
@@ -260,17 +315,18 @@
   }
 
   function coordinateModeOf(m){
-    return m && m.coordinateMode === 'boardRatio' ? 'boardRatio' :
-      (m && m.coordinateMode === 'ratio' ? 'legacyRatio' : 'pixel');
+    return m && m.coordinateMode === 'centerRatio' ? 'centerRatio' :
+      (m && m.coordinateMode === 'boardRatio' ? 'boardRatio' :
+      (m && m.coordinateMode === 'ratio' ? 'legacyRatio' : 'pixel'));
   }
 
   /*
-   * boardRatio はマグネット左上をボード全体の幅・高さに対する比率で保持します。
-   * マグネット自身の幅を計算に含めないため、端末ごとの文字サイズ・解像度差で
-   * 座標が再計算されず、表示しただけの端末が位置を微修正することもありません。
+   * centerRatio はマグネットの中心位置をボード全体に対する比率で保持します。
+   * 全画面切替でマグネットの表示幅が変わっても中心が動かないため、
+   * 手書きとの位置関係を安定して維持できます。
    */
-  function magnetDisplayPosition(m, el){
-    const boardRect = boardSurface.getBoundingClientRect();
+  function magnetDisplayPosition(m, el, boardRectOverride=null){
+    const boardRect = boardRectOverride || boardSurface.getBoundingClientRect();
     const width = el ? el.offsetWidth : 0;
     const height = el ? el.offsetHeight : 0;
     const maxX = Math.max(0, boardRect.width - width);
@@ -278,11 +334,13 @@
     const mode = coordinateModeOf(m);
     let x;
     let y;
-    if(mode === 'boardRatio'){
+    if(mode === 'centerRatio'){
+      x = clamp01(m.x) * boardRect.width - width / 2;
+      y = clamp01(m.y) * boardRect.height - height / 2;
+    }else if(mode === 'boardRatio'){
       x = clamp01(m.x) * boardRect.width;
       y = clamp01(m.y) * boardRect.height;
     }else if(mode === 'legacyRatio'){
-      // 旧版比率座標は表示互換だけ維持し、自動変換・自動保存はしません。
       x = clamp01(m.x) * maxX;
       y = clamp01(m.y) * maxY;
     }else{
@@ -290,6 +348,37 @@
       y = Number(m.y) || 0;
     }
     return {x:Math.max(0, Math.min(x, maxX)), y:Math.max(0, Math.min(y, maxY))};
+  }
+
+  function migrateMagnetsToCenterRatioOnce(){
+    state = normalizeState(state);
+    if(state.coordinateVersion === 3) return false;
+    const rect = boardSurface.getBoundingClientRect();
+    if(rect.width < 1 || rect.height < 1) return false;
+    let changed = false;
+    day().magnets.forEach(m=>{
+      if(coordinateModeOf(m) === 'centerRatio') return;
+      const probe=document.createElement('div');
+      probe.className = m.kind==='person'
+        ? 'floating-chip name-chip'
+        : `floating-chip status-chip ${statusClassForValue(m.value)}`;
+      probe.style.position='absolute';
+      probe.style.visibility='hidden';
+      probe.textContent = m.kind==='person'
+        ? (state.people.find(x=>x.id===m.personId)?.name || '')
+        : (m.value || '');
+      floatingLayer.appendChild(probe);
+      const pos=magnetDisplayPosition(m,probe,rect);
+      const centerX=pos.x + probe.offsetWidth/2;
+      const centerY=pos.y + probe.offsetHeight/2;
+      probe.remove();
+      m.x=Number((centerX/Math.max(1,rect.width)).toFixed(6));
+      m.y=Number((centerY/Math.max(1,rect.height)).toFixed(6));
+      m.coordinateMode='centerRatio';
+      changed=true;
+    });
+    state.coordinateVersion=3;
+    return changed;
   }
 
   function setSyncStatus(type, text){
@@ -311,6 +400,7 @@
   }
 
   function markChanged(delayMs = SAVE_DEBOUNCE_MS){
+    if(MOBILE_VIEW_ONLY) return;
     isDirty = true;
     cacheState();
     setSyncStatus('saving', '未同期');
@@ -321,6 +411,7 @@
   function compactState(){
     const src = normalizeState(state);
     return {
+      coordinateVersion:Number(src.coordinateVersion || 0),
       people: src.people.map(p => ({id:String(p.id), name:String(p.name)})),
       days: {board: {
         magnets: src.days.board.magnets.map(m => {
@@ -331,6 +422,7 @@
             ...(m.value ? {value:String(m.value)} : {}),
             x:mode === 'pixel' ? Math.round(Number(m.x)||0) : Number(clamp01(m.x).toFixed(6)),
             y:mode === 'pixel' ? Math.round(Number(m.y)||0) : Number(clamp01(m.y).toFixed(6)),
+            ...(mode === 'centerRatio' ? {coordinateMode:'centerRatio'} : {}),
             ...(mode === 'boardRatio' ? {coordinateMode:'boardRatio'} : {}),
             ...(mode === 'legacyRatio' ? {coordinateMode:'ratio'} : {})
           };
@@ -419,6 +511,7 @@
   }
 
   async function saveRemote(){
+    if(MOBILE_VIEW_ONLY) return;
     if(saveInFlight || !isDirty) return;
     if(!isGasConfigured()){
       setSyncStatus('error', 'GAS URL未設定');
@@ -479,7 +572,13 @@
         lastSavedPayload = stablePayload();
         cacheState();
         render();
-      }else if(initial && !res.state){
+        requestAnimationFrame(()=>{
+          if(migrateMagnetsToCenterRatioOnce()){
+            renderFloating();
+            markChanged(300);
+          }
+        });
+      }else if(initial && !res.state && !MOBILE_VIEW_ONLY){
         isDirty = true;
         saveRemote();
       }
@@ -538,13 +637,19 @@
     }
   }
 
+  function statusClassForValue(value){
+    if(value === '出張') return 'status-trip';
+    if(['1F','3F','4F','5F','6F'].includes(value)) return 'status-floor';
+    return 'status-direct';
+  }
+
   function renderFloating(){
     floatingLayer.innerHTML='';
     day().magnets.forEach(m=>{
       const el=document.createElement('div');
       const className = m.kind==='person'
         ? 'floating-chip name-chip'
-        : `floating-chip status-chip ${m.value==='出張' ? 'status-trip' : 'status-direct'}`;
+        : `floating-chip status-chip ${statusClassForValue(m.value)}`;
       el.className = className;
       el.style.visibility = 'hidden';
       el.dataset.magnetId = m.id;
@@ -566,6 +671,19 @@
   function renderCanvas(){
     resizeDrawingCanvas();
     redrawDrawingFromState();
+  }
+
+  let layoutFrame1=0;
+  let layoutFrame2=0;
+  function scheduleGeometryRefresh(){
+    cancelAnimationFrame(layoutFrame1);
+    cancelAnimationFrame(layoutFrame2);
+    layoutFrame1=requestAnimationFrame(()=>{
+      layoutFrame2=requestAnimationFrame(()=>{
+        renderFloating();
+        renderCanvas();
+      });
+    });
   }
 
   function render(){
@@ -654,6 +772,7 @@
   }
 
   function toggleDrawingMode(){
+    if(MOBILE_VIEW_ONLY) return;
     drawingMode=drawingMode==='pen'?'erase':'pen';
     updateModeUi(true);
   }
@@ -720,6 +839,7 @@
 
   drawingCanvas.addEventListener('contextmenu',e=>e.preventDefault());
   drawingCanvas.addEventListener('pointerdown',e=>{
+    if(MOBILE_VIEW_ONLY) return;
     if(drag || activeStroke || !e.isPrimary) return;
     if(e.pointerType==='mouse' && e.button!==0 && e.button!==5) return;
     e.preventDefault();
@@ -730,6 +850,7 @@
   },{passive:false});
 
   drawingCanvas.addEventListener('pointermove',e=>{
+    if(MOBILE_VIEW_ONLY) return;
     if(!e.isPrimary) return;
     if(activeStroke && activeStroke.pointerId===e.pointerId){
       appendStrokePoint(e);
@@ -774,6 +895,7 @@
   });
 
   function attachTrayDrag(el){
+    if(MOBILE_VIEW_ONLY) return;
     el.onpointerdown = e => {
       e.preventDefault();
       e.stopPropagation();
@@ -787,6 +909,7 @@
   }
 
   function attachPlacedDrag(el){
+    if(MOBILE_VIEW_ONLY) return;
     el.onpointerdown = e => {
       e.preventDefault();
       e.stopPropagation();
@@ -837,21 +960,21 @@
     rx=Math.max(0,Math.min(rx,maxX));
     ry=Math.max(0,Math.min(ry,maxY));
     return {
-      x:Number((rx/Math.max(1,rect.width)).toFixed(6)),
-      y:Number((ry/Math.max(1,rect.height)).toFixed(6)),
-      coordinateMode:'boardRatio'
+      x:Number(((rx + drag.width/2)/Math.max(1,rect.width)).toFixed(6)),
+      y:Number(((ry + drag.height/2)/Math.max(1,rect.height)).toFixed(6)),
+      coordinateMode:'centerRatio'
     };
   }
 
   document.addEventListener('pointermove',e=>{
-    if(!drag) return;
+    if(MOBILE_VIEW_ONLY || !drag) return;
     drag.lastX=e.clientX; drag.lastY=e.clientY;
     moveGhost(e.clientX,e.clientY);
     drag.lastBoardPos=pointInBoard(e.clientX,e.clientY)?boardPoint(e.clientX,e.clientY):null;
   },{passive:false});
 
   document.addEventListener('pointerup',e=>{
-    if(!drag) return;
+    if(MOBILE_VIEW_ONLY || !drag) return;
     const currentDrag=drag;
     const dropX=Number.isFinite(e.clientX)?e.clientX:drag.lastX;
     const dropY=Number.isFinite(e.clientY)?e.clientY:drag.lastY;
@@ -863,21 +986,25 @@
     drag=null;
     render();
     if(changed) markChanged(80);
+    if(currentDrag.sourceType==='status' && ['1F','3F','4F','5F','6F'].includes(currentDrag.value)){
+      floorPicker?.classList.remove('open');
+      floorPickerToggle?.setAttribute('aria-expanded','false');
+    }
   });
 
   function placeMagnetAt(pos){
     if(drag.sourceType==='placed'){
       const m=day().magnets.find(x=>x.id===drag.fromMagnetId);
-      if(m){m.x=pos.x;m.y=pos.y;m.coordinateMode='boardRatio';}
+      if(m){m.x=pos.x;m.y=pos.y;m.coordinateMode='centerRatio';}
       return;
     }
     if(drag.sourceType==='person'){
       day().magnets=day().magnets.filter(m=>!(m.kind==='person'&&m.personId===drag.personId));
-      day().magnets.push({id:'m'+Date.now()+Math.random().toString(16).slice(2),kind:'person',personId:drag.personId,x:pos.x,y:pos.y,coordinateMode:'boardRatio'});
+      day().magnets.push({id:'m'+Date.now()+Math.random().toString(16).slice(2),kind:'person',personId:drag.personId,x:pos.x,y:pos.y,coordinateMode:'centerRatio'});
       return;
     }
     if(drag.sourceType==='status'){
-      day().magnets.push({id:'m'+Date.now()+Math.random().toString(16).slice(2),kind:'status',value:drag.value,x:pos.x,y:pos.y,coordinateMode:'boardRatio'});
+      day().magnets.push({id:'m'+Date.now()+Math.random().toString(16).slice(2),kind:'status',value:drag.value,x:pos.x,y:pos.y,coordinateMode:'centerRatio'});
     }
   }
 
@@ -886,6 +1013,7 @@
   }
 
   $('#undoBtn').onclick=()=>{
+    if(MOBILE_VIEW_ONLY) return;
     if(day().strokes.length){day().strokes.pop();markChanged();redrawDrawingFromState();toast('1つ前の手書きを戻しました');}
     else toast('戻せる手書きがありません');
   };
@@ -897,17 +1025,20 @@
   }
 
   $('#clearDrawingBtn').onclick=()=>{
+    if(MOBILE_VIEW_ONLY) return;
     if(confirm('手書きした内容をすべて消去しますか？\nマグネットの配置と氏名一覧は残ります。')){
       clearDrawingCanvas(); toast('手書き分をすべて消去しました');
     }
   };
 
   $('#resetPeopleBtn').onclick=()=>{
+    if(MOBILE_VIEW_ONLY) return;
     day().magnets=day().magnets.filter(m=>m.kind!=='person');
     markChanged(); render();
   };
 
   $('#addPersonBtn').onclick=()=>{
+    if(MOBILE_VIEW_ONLY) return;
     modal.classList.add('show'); $('#personName').value='';
     setTimeout(()=>$('#personName').focus(),50);
   };
@@ -927,8 +1058,28 @@
     }catch(e){}
   };
 
+  floorPickerToggle?.addEventListener('pointerup',e=>{
+    if(!e.isPrimary) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const open=!floorPicker.classList.contains('open');
+    floorPicker.classList.toggle('open',open);
+    floorPickerToggle.setAttribute('aria-expanded',open?'true':'false');
+  },{passive:false});
+  document.addEventListener('pointerdown',e=>{
+    if(floorPicker?.classList.contains('open') && !e.target.closest('#floorPicker')){
+      floorPicker.classList.remove('open');
+      floorPickerToggle.setAttribute('aria-expanded','false');
+    }
+  });
+
   document.querySelectorAll('.magnet-box .status-chip').forEach(attachTrayDrag);
-  window.addEventListener('resize',()=>{ renderFloating(); renderCanvas(); });
+  window.addEventListener('resize',scheduleGeometryRefresh);
+  document.addEventListener('fullscreenchange',scheduleGeometryRefresh);
+  if(window.ResizeObserver){
+    const boardResizeObserver=new ResizeObserver(scheduleGeometryRefresh);
+    boardResizeObserver.observe(boardSurface);
+  }
   document.addEventListener('visibilitychange',()=>{
     if(document.visibilityState==='visible') loadRemote();
   });
@@ -936,6 +1087,7 @@
     if(isDirty) saveRemote();
   });
   document.addEventListener('dblclick',e=>{
+    if(MOBILE_VIEW_ONLY) return;
     const chip=e.target.closest('.floating-chip');
     if(!chip) return;
     day().magnets=day().magnets.filter(m=>m.id!==chip.dataset.magnetId);
@@ -945,8 +1097,24 @@
   syncBadge.title='クリックすると同期を再試行します';
   syncBadge.style.cursor='pointer';
   syncBadge.onclick=()=>loadRemote({initial:true});
+  if(MOBILE_VIEW_ONLY){
+    drawingMode='pen';
+    modeToggle.removeAttribute('tabindex');
+    modeToggle.setAttribute('aria-disabled','true');
+    eraserModeMark.removeAttribute('tabindex');
+    document.querySelectorAll('button, .eraser-mode-mark').forEach(el=>{
+      if(el.id!=='fullBtn') el.setAttribute('aria-disabled','true');
+    });
+    setSyncStatus('loading','● 接続中');
+  }
   updateModeUi(false);
   render();
+  requestAnimationFrame(()=>{
+    if(!MOBILE_VIEW_ONLY && migrateMagnetsToCenterRatioOnce()){
+      renderFloating();
+      markChanged(300);
+    }
+  });
   setTimeout(()=>loadRemote({initial:true}), 50);
   pollTimer=setInterval(()=>loadRemote(),POLL_INTERVAL_MS);
 })();
