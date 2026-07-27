@@ -229,7 +229,7 @@
   const GAS_URL = 'https://script.google.com/macros/s/AKfycbzCtvjSaR0GHJnHrZg8NsXg9riYBtd2IEACDpOm_Rwh1H2kiNl-70ayJGvi8w0rqPCDsw/exec';
   const API_TOKEN = 'hirox';
   const ROW_COUNT = 16;
-  const CACHE_KEY = 'hirox_schedule_board_shared_cache_stable_v2';
+  const CACHE_KEY = 'hirox_schedule_board_shared_cache_server_first_v3';
   const PEN_WIDTH = 5;
   const ERASER_WIDTH = 58;
   const POLL_INTERVAL_MS = 2000;
@@ -264,8 +264,10 @@
     document.documentElement.classList.add('mobile-view-only');
   }
 
-  let state = loadCachedState();
+  const cachedFallbackState = loadCachedState();
+  let state = defaultState();
   let revision = 0;
+  let remoteReady = false;
   let drawingMode = 'pen';
   let drag = null;
   let activeStroke = null;
@@ -309,6 +311,22 @@
       localStorage.setItem(CACHE_KEY, JSON.stringify(state));
     }catch(e){
       console.warn('ローカル予備キャッシュの保存に失敗しました。', e);
+    }
+  }
+
+
+  function clearLegacySharedCaches(){
+    try{
+      const removeKeys=[];
+      for(let i=0;i<localStorage.length;i++){
+        const key=localStorage.key(i);
+        if(key && key.startsWith('hirox_schedule_board_shared_cache_') && key!==CACHE_KEY){
+          removeKeys.push(key);
+        }
+      }
+      removeKeys.forEach(key=>localStorage.removeItem(key));
+    }catch(e){
+      console.warn('旧キャッシュの削除に失敗しました。', e);
     }
   }
 
@@ -419,6 +437,10 @@
     if(MOBILE_VIEW_ONLY) return;
     isDirty = true;
     cacheState();
+    if(!remoteReady){
+      setSyncStatus('loading', '最新データ確認中');
+      return;
+    }
     setSyncStatus('saving', '未同期');
     clearTimeout(saveTimer);
     saveTimer = setTimeout(saveRemote, delayMs);
@@ -527,7 +549,7 @@
   }
 
   async function saveRemote(){
-    if(MOBILE_VIEW_ONLY) return;
+    if(MOBILE_VIEW_ONLY || !remoteReady) return;
     if(saveInFlight || !isDirty) return;
     if(!isGasConfigured()){
       setSyncStatus('error', 'GAS URL未設定');
@@ -567,7 +589,7 @@
   }
 
   async function loadRemote({initial=false} = {}){
-    if(loadInFlight || saveInFlight || drag || activeStroke || isDirty) return;
+    if(loadInFlight || saveInFlight || drag || activeStroke || (isDirty && remoteReady)) return;
     if(!isGasConfigured()){
       setSyncStatus('error', 'GAS URL未設定');
       return;
@@ -575,34 +597,52 @@
     loadInFlight = true;
     if(initial) setSyncStatus('loading', '同期確認中…');
     try{
-      const res = await jsonp({action:'load', clientId, since:revision}, REQUEST_TIMEOUT_MS);
+      const res = await jsonp({action:'load', clientId, since:initial ? -1 : revision}, REQUEST_TIMEOUT_MS);
       if(!res || !res.ok) throw new Error(res && res.error ? res.error : 'load_failed');
       const remoteRevision = Number(res.revision || 0);
+
       if(res.notModified){
+        remoteReady = true;
+        isDirty = false;
         setSyncStatus('ok', '同期済み');
         return;
       }
+
       if(res.state && (initial || remoteRevision > revision)){
         state = normalizeState(res.state);
         revision = remoteRevision;
+        remoteReady = true;
+        isDirty = false;
         lastSavedPayload = stablePayload();
         cacheState();
         render();
         requestAnimationFrame(()=>{
-          if(migrateMagnetsToCenterRatioOnce()){
+          if(!MOBILE_VIEW_ONLY && migrateMagnetsToCenterRatioOnce()){
             renderFloating();
             markChanged(300);
           }
         });
-      }else if(initial && !res.state && !MOBILE_VIEW_ONLY){
-        isDirty = true;
-        saveRemote();
+      }else if(initial && !res.state){
+        state = defaultState();
+        revision = remoteRevision;
+        remoteReady = true;
+        isDirty = false;
+        lastSavedPayload = stablePayload();
+        cacheState();
+        render();
       }
       setSyncStatus('ok', '同期済み');
     }catch(e){
       console.error('読み込みエラー', e);
       setSyncStatus('error', '再試行待ち');
-      if(initial) toast('端末内データを表示中です。同期は自動で再試行します。');
+      if(initial){
+        state = normalizeState(cachedFallbackState);
+        remoteReady = false;
+        isDirty = false;
+        render();
+        setSyncStatus('error', 'キャッシュ閲覧中');
+        toast('通信できないため端末内の参考データを表示しています。サーバーへは送信しません。');
+      }
     }finally{
       loadInFlight = false;
     }
@@ -1123,14 +1163,10 @@
     });
     setSyncStatus('loading','● 接続中');
   }
+  clearLegacySharedCaches();
   updateModeUi(false);
   render();
-  requestAnimationFrame(()=>{
-    if(!MOBILE_VIEW_ONLY && migrateMagnetsToCenterRatioOnce()){
-      renderFloating();
-      markChanged(300);
-    }
-  });
+  setSyncStatus('loading', MOBILE_VIEW_ONLY ? '● 接続中' : '最新データ確認中');
   setTimeout(()=>loadRemote({initial:true}), 50);
   pollTimer=setInterval(()=>loadRemote(),POLL_INTERVAL_MS);
 })();
