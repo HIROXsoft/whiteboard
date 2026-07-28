@@ -236,19 +236,21 @@
   'use strict';
 
   /* GASをウェブアプリとしてデプロイ後、発行URLに置き換えてください。 */
-  const GAS_URL = 'https://script.google.com/macros/s/AKfycbwGDLrP8fGgJ3NiwWL_swX7ZQe0caaprXX8iffF32bnHeYdM6x7Ss1nEJeSh7admuVY7A/exec';
+  const GAS_URL = 'https://script.google.com/macros/s/AKfycbzFrC5rtU_CTHWzJwVFE0ZNaoSyFMTmXybmNVS86DP_VO2-ldyjNjDoRAezMVTBVVEc/exec';
   const API_TOKEN = 'hirox';
   const ROW_COUNT = 16;
   const CACHE_KEY = 'hirox_schedule_board_shared_cache_server_first_v3';
   const PEN_WIDTH = 5;
   const ERASER_WIDTH = 58;
-  const POLL_INTERVAL_MS = 8000;
+  const POLL_INTERVAL_MS = 3000;
+  const IDLE_POLL_INTERVAL_MS = 8000;
   const SAVE_DEBOUNCE_MS = 600;
   const REQUEST_TIMEOUT_MS = 15000;
-  const ACK_POLL_MS = 750;
+  const ACK_POLL_MS = 900;
   const MAX_RETRY_DELAY_MS = 30000;
   const ERASER_AUTO_RETURN_MS = 10000;
-  const WRITE_LOCK_RETRY_MS = 1200;
+  const WRITE_LOCK_RETRY_MS = 900;
+  const WRITE_LOCK_RENEW_MS = 4000;
   const CONFLICT_BACKUP_KEY = 'hirox_schedule_board_conflict_backup_v1';
   const MOBILE_VIEW_ONLY = (() => {
     const uaMobile = navigator.userAgentData ? navigator.userAgentData.mobile : /Android|iPhone|iPod|Mobile/i.test(navigator.userAgent);
@@ -301,6 +303,9 @@
   let remoteWriteLocked = false;
   let writeLockToken = '';
   let lockRetryTimer = null;
+  let lockRenewTimer = null;
+  let editLeasePromise = null;
+  let lastInteractionAt = Date.now();
 
   function emptyDay(){
     return { strokes:[], magnets:[] };
@@ -483,18 +488,68 @@
     return true;
   }
 
+  function stopLockRenew(){
+    clearInterval(lockRenewTimer);
+    lockRenewTimer=null;
+  }
+
+  function startLockRenew(){
+    stopLockRenew();
+    if(!writeLockToken) return;
+    lockRenewTimer=setInterval(async()=>{
+      if(!writeLockToken || document.visibilityState==='hidden') return;
+      try{
+        const res=await jsonp({action:'renew',clientId,lockToken:writeLockToken},5000);
+        if(!res || !res.ok || res.locked){
+          stopLockRenew();
+          writeLockToken='';
+          setRemoteWriteLock(true,'編集権の更新に失敗しました。最新状態を確認しています。');
+          setSyncStatus('locked','編集権確認中');
+        }
+      }catch(_e){}
+    },WRITE_LOCK_RENEW_MS);
+  }
+
   async function acquireWriteLock(){
-    const res=await jsonp({action:'acquire',clientId},6000);
-    if(!res || !res.ok) throw new Error(res && res.error ? res.error : 'lock_failed');
-    if(res.locked){
-      writeLockToken='';
-      setRemoteWriteLock(true,'他の端末が保存中です。完了後に自動で再試行します。');
-      setSyncStatus('locked','他端末が保存中');
+    if(writeLockToken) return true;
+    if(editLeasePromise) return editLeasePromise;
+    editLeasePromise=(async()=>{
+      setSyncStatus('loading','編集権を確認中…');
+      const res=await jsonp({action:'acquire',clientId},7000);
+      if(!res || !res.ok) throw new Error(res && res.error ? res.error : 'lock_failed');
+      if(res.locked){
+        writeLockToken='';
+        setRemoteWriteLock(true,'他の端末が編集中です。完了後に操作できます。');
+        setSyncStatus('locked','他端末が編集中');
+        return false;
+      }
+      writeLockToken=String(res.lockToken||'');
+      clearWriteLockNotice();
+      startLockRenew();
+      setSyncStatus('ok','編集できます');
+      return Boolean(writeLockToken);
+    })();
+    try{return await editLeasePromise;}finally{editLeasePromise=null;}
+  }
+
+  async function releaseWriteLock(){
+    stopLockRenew();
+    const token=writeLockToken;
+    writeLockToken='';
+    if(!token) return;
+    try{await jsonp({action:'release',clientId,lockToken:token},5000);}catch(_e){}
+  }
+
+  async function ensureEditLease(){
+    if(MOBILE_VIEW_ONLY || !remoteReady) return false;
+    lastInteractionAt=Date.now();
+    try{return await acquireWriteLock();}
+    catch(e){
+      console.error('編集権取得エラー',e);
+      setSyncStatus('error','接続再試行中');
+      toast('同期サーバーへ接続できません。少し待ってから再操作してください。',2600);
       return false;
     }
-    writeLockToken=String(res.lockToken||'');
-    clearWriteLockNotice();
-    return Boolean(writeLockToken);
   }
 
   function saveConflictBackup(payload, ack){
@@ -645,7 +700,8 @@
     if(document.visibilityState === 'hidden') return;
     pollTimer = setTimeout(async()=>{
       await loadRemote();
-      scheduleNextPoll(consecutiveLoadFailures ? retryDelay(consecutiveLoadFailures) : POLL_INTERVAL_MS);
+      const idle=Date.now()-lastInteractionAt>20000;
+      scheduleNextPoll(consecutiveLoadFailures ? retryDelay(consecutiveLoadFailures) : (idle?IDLE_POLL_INTERVAL_MS:POLL_INTERVAL_MS));
     }, delayMs);
   }
 
@@ -669,7 +725,7 @@
     clearTimeout(lockRetryTimer);
     const requestId = clientId + '_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,7);
     try{
-      const acquired=await acquireWriteLock();
+      const acquired=writeLockToken ? true : await acquireWriteLock();
       if(!acquired){
         saveInFlight=false;
         lockRetryTimer=setTimeout(saveRemote,WRITE_LOCK_RETRY_MS);
@@ -680,7 +736,7 @@
       setRemoteWriteLock(false);
       await postByHiddenForm({ action:'save', token:API_TOKEN, requestId, clientId, revision, lockToken:writeLockToken, payload });
       const ack = await waitForAck(requestId);
-      writeLockToken='';
+      stopLockRenew();
 
       if(ack && ack.conflict){
         applyConflictState(ack,payload);
@@ -705,13 +761,14 @@
       setSyncStatus(isDirty ? 'saving' : 'ok', isDirty ? '未同期' : '同期済み');
     }catch(e){
       console.error('保存エラー', e);
-      writeLockToken='';
+      await releaseWriteLock();
       consecutiveSaveFailures += 1;
       clearWriteLockNotice();
       setSyncStatus('error', '同期失敗');
       toast('同期に失敗しました。通信状態を確認してください。');
     }finally{
       saveInFlight = false;
+      if(!isDirty) await releaseWriteLock();
       if(isDirty && !lockRetryTimer){
         clearTimeout(saveTimer);
         saveTimer = setTimeout(saveRemote, retryDelay(consecutiveSaveFailures));
@@ -1040,15 +1097,17 @@
   }
 
   drawingCanvas.addEventListener('contextmenu',e=>e.preventDefault());
-  drawingCanvas.addEventListener('pointerdown',e=>{
+  drawingCanvas.addEventListener('pointerdown',async e=>{
     if(MOBILE_VIEW_ONLY) return;
     if(drag || activeStroke || !e.isPrimary) return;
     if(e.pointerType==='mouse' && e.button!==0 && e.button!==5) return;
     e.preventDefault();
     try{ drawingCanvas.setPointerCapture(e.pointerId); }catch(_e){}
-    const tool=effectiveTool(e);
-    beginStroke(e.pointerId,tool,e.clientX,e.clientY);
-    if(tool==='erase') showEraserCursor(e.clientX,e.clientY);
+    const pointerId=e.pointerId, clientX=e.clientX, clientY=e.clientY, tool=effectiveTool(e);
+    const ok=await ensureEditLease();
+    if(!ok) return;
+    beginStroke(pointerId,tool,clientX,clientY);
+    if(tool==='erase') showEraserCursor(clientX,clientY);
   },{passive:false});
 
   drawingCanvas.addEventListener('pointermove',e=>{
@@ -1098,9 +1157,10 @@
 
   function attachTrayDrag(el){
     if(MOBILE_VIEW_ONLY) return;
-    el.onpointerdown = e => {
+    el.onpointerdown = async e => {
       e.preventDefault();
       e.stopPropagation();
+      if(!await ensureEditLease()) return;
       startDragFromElement(el, {
         sourceType:el.dataset.type,
         personId:el.dataset.id || null,
@@ -1112,9 +1172,10 @@
 
   function attachPlacedDrag(el){
     if(MOBILE_VIEW_ONLY) return;
-    el.onpointerdown = e => {
+    el.onpointerdown = async e => {
       e.preventDefault();
       e.stopPropagation();
+      if(!await ensureEditLease()) return;
       const m = day().magnets.find(x=>x.id===el.dataset.magnetId);
       if(!m) return;
       startDragFromElement(el, {
@@ -1214,8 +1275,8 @@
     if(drag.sourceType==='placed') day().magnets=day().magnets.filter(m=>m.id!==drag.fromMagnetId);
   }
 
-  $('#undoBtn').onclick=()=>{
-    if(!canEditNow()) return;
+  $('#undoBtn').onclick=async()=>{
+    if(!canEditNow() || !await ensureEditLease()) return;
     if(MOBILE_VIEW_ONLY) return;
     if(day().strokes.length){day().strokes.pop();markChanged();redrawDrawingFromState();toast('1つ前の手書きを戻しました');}
     else toast('戻せる手書きがありません');
@@ -1227,17 +1288,17 @@
     markChanged();
   }
 
-  $('#clearDrawingBtn').onclick=()=>{
+  $('#clearDrawingBtn').onclick=async()=>{
     if(!canEditNow()) return;
-    if(MOBILE_VIEW_ONLY) return;
+    if(MOBILE_VIEW_ONLY || !await ensureEditLease()) return;
     if(confirm('手書きした内容をすべて消去しますか？\nマグネットの配置と氏名一覧は残ります。')){
       clearDrawingCanvas(); toast('手書き分をすべて消去しました');
     }
   };
 
-  $('#resetPeopleBtn').onclick=()=>{
+  $('#resetPeopleBtn').onclick=async()=>{
     if(!canEditNow()) return;
-    if(MOBILE_VIEW_ONLY) return;
+    if(MOBILE_VIEW_ONLY || !await ensureEditLease()) return;
     day().magnets=day().magnets.filter(m=>m.kind!=='person');
     markChanged(); render();
   };
@@ -1298,6 +1359,7 @@
   });
   window.addEventListener('beforeunload',()=>{
     if(isDirty) saveRemote();
+    stopLockRenew();
   });
   document.addEventListener('dblclick',e=>{
     if(MOBILE_VIEW_ONLY || !canEditNow()) return;
