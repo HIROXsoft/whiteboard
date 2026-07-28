@@ -226,16 +226,17 @@
   'use strict';
 
   /* GASをウェブアプリとしてデプロイ後、発行URLに置き換えてください。 */
-  const GAS_URL = 'https://script.google.com/macros/s/AKfycbzCtvjSaR0GHJnHrZg8NsXg9riYBtd2IEACDpOm_Rwh1H2kiNl-70ayJGvi8w0rqPCDsw/exec';
+  const GAS_URL = 'https://script.google.com/macros/s/AKfycbxqjv0CMMai1DxyfdKQomcbY1rinESjtrGpDmM2YvZ34C7mZbQiO0kQABc_XVbwiZ_2_Q/exec';
   const API_TOKEN = 'hirox';
   const ROW_COUNT = 16;
   const CACHE_KEY = 'hirox_schedule_board_shared_cache_server_first_v3';
   const PEN_WIDTH = 5;
   const ERASER_WIDTH = 58;
-  const POLL_INTERVAL_MS = 2000;
-  const SAVE_DEBOUNCE_MS = 160;
-  const REQUEST_TIMEOUT_MS = 7000;
-  const ACK_POLL_MS = 120;
+  const POLL_INTERVAL_MS = 8000;
+  const SAVE_DEBOUNCE_MS = 600;
+  const REQUEST_TIMEOUT_MS = 15000;
+  const ACK_POLL_MS = 750;
+  const MAX_RETRY_DELAY_MS = 30000;
   const ERASER_AUTO_RETURN_MS = 10000;
   const MOBILE_VIEW_ONLY = (() => {
     const uaMobile = navigator.userAgentData ? navigator.userAgentData.mobile : /Android|iPhone|iPod|Mobile/i.test(navigator.userAgent);
@@ -274,6 +275,9 @@
   let activeStroke = null;
   let saveTimer = null;
   let pollTimer = null;
+  let retryTimer = null;
+  let consecutiveLoadFailures = 0;
+  let consecutiveSaveFailures = 0;
   let eraserAutoReturnTimer = null;
   let isDirty = false;
   let saveInFlight = false;
@@ -540,14 +544,28 @@
     const deadline = Date.now() + REQUEST_TIMEOUT_MS;
     await new Promise(r => setTimeout(r, ACK_POLL_MS));
     while(Date.now() < deadline){
-      const res = await jsonp({action:'ack', requestId}, 4500);
-      if(res && res.pending){
-        await new Promise(r => setTimeout(r, ACK_POLL_MS));
-        continue;
+      try{
+        const res = await jsonp({action:'ack', requestId}, 6000);
+        if(res && !res.pending) return res;
+      }catch(e){
+        // 一時的なACK通信失敗は、期限内であれば次回確認まで待つ。
       }
-      return res;
+      await new Promise(r => setTimeout(r, ACK_POLL_MS));
     }
     throw new Error('ack_timeout');
+  }
+
+  function retryDelay(failureCount){
+    return Math.min(MAX_RETRY_DELAY_MS, Math.max(2000, 2000 * Math.pow(2, Math.max(0, failureCount - 1))));
+  }
+
+  function scheduleNextPoll(delayMs = POLL_INTERVAL_MS){
+    clearTimeout(pollTimer);
+    if(document.visibilityState === 'hidden') return;
+    pollTimer = setTimeout(async()=>{
+      await loadRemote();
+      scheduleNextPoll(consecutiveLoadFailures ? retryDelay(consecutiveLoadFailures) : POLL_INTERVAL_MS);
+    }, delayMs);
   }
 
   async function saveRemote(){
@@ -573,19 +591,21 @@
       const ack = await waitForAck(requestId);
       if(!ack || !ack.ok) throw new Error(ack && ack.error ? ack.error : 'save_failed');
       revision = Number(ack.revision || revision + 1);
+      consecutiveSaveFailures = 0;
       lastSavedPayload = payload;
       isDirty = stablePayload() !== payload;
       cacheState();
       setSyncStatus(isDirty ? 'saving' : 'ok', isDirty ? '未同期' : '同期済み');
     }catch(e){
       console.error('保存エラー', e);
+      consecutiveSaveFailures += 1;
       setSyncStatus('error', '同期失敗');
       toast('同期に失敗しました。通信状態を確認してください。');
     }finally{
       saveInFlight = false;
       if(isDirty){
         clearTimeout(saveTimer);
-        saveTimer = setTimeout(saveRemote, 900);
+        saveTimer = setTimeout(saveRemote, retryDelay(consecutiveSaveFailures));
       }
     }
   }
@@ -602,6 +622,7 @@
       const res = await jsonp({action:'load', clientId, since:initial ? -1 : revision}, REQUEST_TIMEOUT_MS);
       if(!res || !res.ok) throw new Error(res && res.error ? res.error : 'load_failed');
       const remoteRevision = Number(res.revision || 0);
+      consecutiveLoadFailures = 0;
 
       if(res.notModified){
         remoteReady = true;
@@ -636,6 +657,7 @@
       setSyncStatus('ok', '同期済み');
     }catch(e){
       console.error('読み込みエラー', e);
+      consecutiveLoadFailures += 1;
       setSyncStatus('error', '再試行待ち');
       if(initial){
         state = normalizeState(cachedFallbackState);
@@ -1152,7 +1174,13 @@
     boardResizeObserver.observe(boardSurface);
   }
   document.addEventListener('visibilitychange',()=>{
-    if(document.visibilityState==='visible') loadRemote();
+    if(document.visibilityState==='hidden'){
+      clearTimeout(pollTimer);
+      clearTimeout(retryTimer);
+      return;
+    }
+    consecutiveLoadFailures = 0;
+    loadRemote({initial:!remoteReady}).finally(()=>scheduleNextPoll(POLL_INTERVAL_MS));
   });
   window.addEventListener('beforeunload',()=>{
     if(isDirty) saveRemote();
@@ -1183,7 +1211,7 @@
   render();
   setSyncStatus('loading', MOBILE_VIEW_ONLY ? '● 接続中' : '最新データ確認中');
   setTimeout(()=>loadRemote({initial:true}), 50);
-  pollTimer=setInterval(()=>loadRemote(),POLL_INTERVAL_MS);
+  scheduleNextPoll(POLL_INTERVAL_MS);
 })();
 </script>
 
