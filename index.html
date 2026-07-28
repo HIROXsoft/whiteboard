@@ -102,15 +102,6 @@
   .sync-badge.ok{background:#e8f7ec;color:#176b32;border-color:#9dd4aa}
   .sync-badge.saving,.sync-badge.loading{background:#fff7d6;color:#765b00;border-color:#ddc86b}
   .sync-badge.error{background:#fff0f0;color:#a11d1d;border-color:#e2aaaa}
-  .sync-badge.locked{background:#fff1cc;color:#7a4b00;border-color:#e2ad42}
-  .sync-badge.conflict{background:#ffe3e3;color:#981b1b;border-color:#df8b8b}
-  .write-lock-banner{position:fixed;left:50%;top:72px;transform:translateX(-50%);z-index:250;display:none;align-items:center;gap:10px;max-width:min(720px,92vw);padding:11px 18px;border:2px solid #e0a22d;border-radius:14px;background:#fff3cd;color:#6e4700;font-weight:900;box-shadow:0 8px 24px rgba(0,0,0,.22);text-align:center}
-  .write-lock-banner.show{display:flex}
-  .write-lock-banner.conflict{border-color:#d94b4b;background:#ffe6e6;color:#8b1717}
-  .write-lock-spinner{width:18px;height:18px;border:3px solid currentColor;border-right-color:transparent;border-radius:50%;animation:writeLockSpin .8s linear infinite;flex:none}
-  .write-lock-banner.conflict .write-lock-spinner{display:none}
-  @keyframes writeLockSpin{to{transform:rotate(360deg)}}
-  body.remote-write-locked{cursor:progress}
   .board-surface .drawing-canvas{cursor:crosshair}
   .board-surface.erase-mode{outline:4px solid rgba(224,108,0,.62);outline-offset:-4px}
   .board-surface.erase-mode .drawing-canvas{cursor:none}
@@ -220,7 +211,6 @@
     </section>
   </main>
 </div>
-<div id="writeLockBanner" class="write-lock-banner" role="status" aria-live="assertive"><span class="write-lock-spinner"></span><span id="writeLockText">他の端末が保存中です。完了まで操作をお待ちください。</span></div>
 
 <div class="modal" id="personModal">
   <div class="dialog">
@@ -236,26 +226,17 @@
   'use strict';
 
   /* GASをウェブアプリとしてデプロイ後、発行URLに置き換えてください。 */
-  const GAS_URL = 'https://script.google.com/macros/s/AKfycbwGDLrP8fGgJ3NiwWL_swX7ZQe0caaprXX8iffF32bnHeYdM6x7Ss1nEJeSh7admuVY7A/exec';
+  const GAS_URL = 'https://script.google.com/macros/s/AKfycbwoyLXIAUdV_xvwxVAh4QGgnT06VU8A51vqUkpvpopDtB-D72Oku4YAC2Yy_w-HLlSA7w/exec';
   const API_TOKEN = 'hirox';
   const ROW_COUNT = 16;
   const CACHE_KEY = 'hirox_schedule_board_shared_cache_server_first_v3';
   const PEN_WIDTH = 5;
   const ERASER_WIDTH = 58;
-  const POLL_INTERVAL_MS = 3000;
-  const IDLE_POLL_INTERVAL_MS = 8000;
-  const SAVE_DEBOUNCE_MS = 600;
-  const REQUEST_TIMEOUT_MS = 15000;
-  const ACK_POLL_MS = 900;
-  const MAX_RETRY_DELAY_MS = 30000;
+  const POLL_INTERVAL_MS = 2000;
+  const SAVE_DEBOUNCE_MS = 160;
+  const REQUEST_TIMEOUT_MS = 7000;
+  const ACK_POLL_MS = 120;
   const ERASER_AUTO_RETURN_MS = 10000;
-  const WRITE_LOCK_RETRY_MS = 900;
-  const WRITE_LOCK_RENEW_MS = 4000;
-  const CONFLICT_BACKUP_KEY = 'hirox_schedule_board_conflict_backup_v1';
-  const AUTO_REFRESH_DELAY_MS = 3000;
-  const AUTO_REFRESH_WINDOW_MS = 60000;
-  const AUTO_REFRESH_MAX_COUNT = 3;
-  const AUTO_REFRESH_GUARD_KEY = 'hirox_schedule_board_auto_refresh_guard_v1';
   const MOBILE_VIEW_ONLY = (() => {
     const uaMobile = navigator.userAgentData ? navigator.userAgentData.mobile : /Android|iPhone|iPod|Mobile/i.test(navigator.userAgent);
     const coarse = window.matchMedia ? window.matchMedia('(pointer: coarse)').matches : ('ontouchstart' in window);
@@ -278,8 +259,6 @@
   const modeBanner = $('#modeBanner');
   const eraserCursor = $('#eraserCursor');
   const eraserModeMark = $('#eraserModeMark');
-  const writeLockBanner = $('#writeLockBanner');
-  const writeLockText = $('#writeLockText');
 
   if(MOBILE_VIEW_ONLY){
     document.body.classList.add('mobile-view-only');
@@ -295,23 +274,12 @@
   let activeStroke = null;
   let saveTimer = null;
   let pollTimer = null;
-  let retryTimer = null;
-  let consecutiveLoadFailures = 0;
-  let consecutiveSaveFailures = 0;
   let eraserAutoReturnTimer = null;
   let isDirty = false;
   let saveInFlight = false;
   let loadInFlight = false;
   let lastSavedPayload = '';
   let clientId = getClientId();
-  let remoteWriteLocked = false;
-  let writeLockToken = '';
-  let lockRetryTimer = null;
-  let lockRenewTimer = null;
-  let editLeasePromise = null;
-  let lastInteractionAt = Date.now();
-  let emergencyRefreshTimer = null;
-  let emergencyRefreshScheduled = false;
 
   function emptyDay(){
     return { strokes:[], magnets:[] };
@@ -460,177 +428,11 @@
     return state.days.board;
   }
 
-  function toast(msg, durationMs=1500){
+  function toast(msg){
     const t=$('#toast');
     t.textContent=msg;
     t.classList.add('show');
-    setTimeout(()=>t.classList.remove('show'),durationMs);
-  }
-
-  function setRemoteWriteLock(locked, message='', conflict=false){
-    remoteWriteLocked = Boolean(locked);
-    document.body.classList.toggle('remote-write-locked', remoteWriteLocked);
-    if(writeLockBanner){
-      writeLockBanner.classList.toggle('show', remoteWriteLocked || conflict);
-      writeLockBanner.classList.toggle('conflict', conflict);
-    }
-    if(writeLockText && message) writeLockText.textContent=message;
-  }
-
-  function clearWriteLockNotice(){
-    remoteWriteLocked=false;
-    document.body.classList.remove('remote-write-locked');
-    if(writeLockBanner){
-      writeLockBanner.classList.remove('show','conflict');
-    }
-  }
-
-  function canEditNow(showNotice=true){
-    if(MOBILE_VIEW_ONLY) return false;
-    if(remoteWriteLocked){
-      if(showNotice) toast('他の端末が保存中です。少しお待ちください。',2200);
-      return false;
-    }
-    return true;
-  }
-
-  function readAutoRefreshGuard(){
-    try{
-      const value=JSON.parse(sessionStorage.getItem(AUTO_REFRESH_GUARD_KEY)||'null');
-      if(!value || !Number.isFinite(value.startedAt) || Date.now()-value.startedAt>AUTO_REFRESH_WINDOW_MS){
-        return {startedAt:Date.now(),count:0};
-      }
-      return {startedAt:value.startedAt,count:Number(value.count)||0};
-    }catch(_e){
-      return {startedAt:Date.now(),count:0};
-    }
-  }
-
-  function clearAutoRefreshGuard(){
-    try{ sessionStorage.removeItem(AUTO_REFRESH_GUARD_KEY); }catch(_e){}
-  }
-
-  function scheduleEmergencyRefresh(reason='同期通信に失敗しました'){
-    if(emergencyRefreshScheduled) return;
-    emergencyRefreshScheduled=true;
-
-    // 古い画面の内容を送らないよう、即座に編集と保存を停止します。
-    remoteReady=false;
-    isDirty=false;
-    activeStroke=null;
-    drag=null;
-    clearTimeout(saveTimer);
-    clearTimeout(pollTimer);
-    clearTimeout(retryTimer);
-    clearTimeout(lockRetryTimer);
-    setSyncStatus('error','自動再読込');
-
-    const guard=readAutoRefreshGuard();
-    if(guard.count>=AUTO_REFRESH_MAX_COUNT){
-      setRemoteWriteLock(true,'通信異常が続いているため自動再読込を停止しました。Wi-FiとGAS URLを確認し、接続表示をタップしてください。',true);
-      toast('通信異常が続いています。編集は停止されています。',5000);
-      return;
-    }
-
-    guard.count+=1;
-    try{ sessionStorage.setItem(AUTO_REFRESH_GUARD_KEY,JSON.stringify(guard)); }catch(_e){}
-
-    let remaining=Math.ceil(AUTO_REFRESH_DELAY_MS/1000);
-    const updateMessage=()=>{
-      setRemoteWriteLock(true,`${reason}。安全のため編集を停止し、${remaining}秒後に再読込します。`,false);
-    };
-    updateMessage();
-    emergencyRefreshTimer=setInterval(()=>{
-      remaining-=1;
-      if(remaining>0) updateMessage();
-    },1000);
-    setTimeout(()=>{
-      clearInterval(emergencyRefreshTimer);
-      location.reload();
-    },AUTO_REFRESH_DELAY_MS);
-  }
-
-  /*
-   * 編集開始前の端末間ロックは使用しません。
-   * 入力は即時許可し、保存処理だけをGAS側のLockServiceで直列化します。
-   */
-  function stopLockRenew(){}
-  function startLockRenew(){}
-  async function acquireWriteLock(){ return true; }
-  async function releaseWriteLock(){}
-  async function ensureEditLease(){
-    if(MOBILE_VIEW_ONLY || !remoteReady) return false;
-    lastInteractionAt=Date.now();
-    clearWriteLockNotice();
-    return true;
-  }
-
-  function strokeKey(st){
-    return JSON.stringify({
-      tool:st && st.tool==='erase'?'erase':'pen',
-      width:Number(st && st.width || 0),
-      points:Array.isArray(st && st.points)?st.points:[]
-    });
-  }
-
-  function mergeConcurrentState(remoteState, localState){
-    const remote=normalizeState(remoteState);
-    const local=normalizeState(localState);
-    const peopleMap=new Map();
-    remote.people.forEach(p=>peopleMap.set(String(p.id),p));
-    local.people.forEach(p=>peopleMap.set(String(p.id),p));
-
-    const magnetMap=new Map();
-    remote.days.board.magnets.forEach(m=>magnetMap.set(String(m.id),m));
-    local.days.board.magnets.forEach(m=>magnetMap.set(String(m.id),m));
-
-    const strokeMap=new Map();
-    remote.days.board.strokes.forEach(st=>strokeMap.set(strokeKey(st),st));
-    local.days.board.strokes.forEach(st=>strokeMap.set(strokeKey(st),st));
-
-    return normalizeState({
-      ...remote,
-      ...local,
-      people:Array.from(peopleMap.values()),
-      days:{
-        ...remote.days,
-        ...local.days,
-        board:{
-          ...remote.days.board,
-          ...local.days.board,
-          magnets:Array.from(magnetMap.values()),
-          strokes:Array.from(strokeMap.values())
-        }
-      }
-    });
-  }
-
-  function saveConflictBackup(payload, ack){
-    try{
-      localStorage.setItem(CONFLICT_BACKUP_KEY,JSON.stringify({savedAt:new Date().toISOString(),baseRevision:revision,serverRevision:Number(ack?.revision||0),payload}));
-    }catch(e){}
-  }
-
-  function applyConflictState(ack, payload){
-    saveConflictBackup(payload,ack);
-    let localState=null;
-    try{ localState=normalizeState(JSON.parse(payload)); }catch(_e){ localState=normalizeState(state); }
-    if(ack && ack.state){
-      state=mergeConcurrentState(ack.state,localState);
-      revision=Number(ack.revision||revision);
-      remoteReady=true;
-      isDirty=true;
-      cacheState();
-      render();
-    }
-    setRemoteWriteLock(false,'ほぼ同時の更新を検出しました。両方の内容を統合して再保存しています。',true);
-    setSyncStatus('saving','同時更新を統合中');
-    toast('他端末の更新と現在の入力を統合しています。',2800);
-    clearTimeout(saveTimer);
-    saveTimer=setTimeout(()=>{
-      clearWriteLockNotice();
-      saveRemote();
-    },350);
+    setTimeout(()=>t.classList.remove('show'),1500);
   }
 
   function markChanged(delayMs = SAVE_DEBOUNCE_MS){
@@ -738,29 +540,14 @@
     const deadline = Date.now() + REQUEST_TIMEOUT_MS;
     await new Promise(r => setTimeout(r, ACK_POLL_MS));
     while(Date.now() < deadline){
-      try{
-        const res = await jsonp({action:'ack', requestId}, 6000);
-        if(res && !res.pending) return res;
-      }catch(e){
-        // 一時的なACK通信失敗は、期限内であれば次回確認まで待つ。
+      const res = await jsonp({action:'ack', requestId}, 4500);
+      if(res && res.pending){
+        await new Promise(r => setTimeout(r, ACK_POLL_MS));
+        continue;
       }
-      await new Promise(r => setTimeout(r, ACK_POLL_MS));
+      return res;
     }
     throw new Error('ack_timeout');
-  }
-
-  function retryDelay(failureCount){
-    return Math.min(MAX_RETRY_DELAY_MS, Math.max(2000, 2000 * Math.pow(2, Math.max(0, failureCount - 1))));
-  }
-
-  function scheduleNextPoll(delayMs = POLL_INTERVAL_MS){
-    clearTimeout(pollTimer);
-    if(document.visibilityState === 'hidden') return;
-    pollTimer = setTimeout(async()=>{
-      await loadRemote();
-      const idle=Date.now()-lastInteractionAt>20000;
-      scheduleNextPoll(consecutiveLoadFailures ? retryDelay(consecutiveLoadFailures) : (idle?IDLE_POLL_INTERVAL_MS:POLL_INTERVAL_MS));
-    }, delayMs);
   }
 
   async function saveRemote(){
@@ -774,46 +561,31 @@
     const payload = stablePayload();
     if(payload === lastSavedPayload){
       isDirty = false;
-      clearWriteLockNotice();
       setSyncStatus('ok', '同期済み');
       return;
     }
 
     saveInFlight = true;
-    clearTimeout(lockRetryTimer);
+    setSyncStatus('saving', '同期中…');
     const requestId = clientId + '_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,7);
     try{
-      setSyncStatus('saving', '同期中…');
-      setRemoteWriteLock(false);
       await postByHiddenForm({ action:'save', token:API_TOKEN, requestId, clientId, revision, payload });
       const ack = await waitForAck(requestId);
-
-      if(ack && ack.conflict){
-        applyConflictState(ack,payload);
-        consecutiveSaveFailures=0;
-        return;
-      }
       if(!ack || !ack.ok) throw new Error(ack && ack.error ? ack.error : 'save_failed');
-
       revision = Number(ack.revision || revision + 1);
-      consecutiveSaveFailures = 0;
       lastSavedPayload = payload;
       isDirty = stablePayload() !== payload;
       cacheState();
-      clearAutoRefreshGuard();
-      clearWriteLockNotice();
       setSyncStatus(isDirty ? 'saving' : 'ok', isDirty ? '未同期' : '同期済み');
     }catch(e){
       console.error('保存エラー', e);
-      consecutiveSaveFailures += 1;
-      clearWriteLockNotice();
       setSyncStatus('error', '同期失敗');
-      scheduleEmergencyRefresh('同期保存に失敗しました');
+      toast('同期に失敗しました。通信状態を確認してください。');
     }finally{
       saveInFlight = false;
-      if(isDirty && !lockRetryTimer){
+      if(isDirty){
         clearTimeout(saveTimer);
-        saveTimer = setTimeout(saveRemote, retryDelay(consecutiveSaveFailures));
+        saveTimer = setTimeout(saveRemote, 900);
       }
     }
   }
@@ -830,12 +602,10 @@
       const res = await jsonp({action:'load', clientId, since:initial ? -1 : revision}, REQUEST_TIMEOUT_MS);
       if(!res || !res.ok) throw new Error(res && res.error ? res.error : 'load_failed');
       const remoteRevision = Number(res.revision || 0);
-      consecutiveLoadFailures = 0;
 
       if(res.notModified){
         remoteReady = true;
         isDirty = false;
-        clearAutoRefreshGuard();
         setSyncStatus('ok', '同期済み');
         return;
       }
@@ -863,19 +633,18 @@
         cacheState();
         render();
       }
-      clearAutoRefreshGuard();
       setSyncStatus('ok', '同期済み');
     }catch(e){
       console.error('読み込みエラー', e);
-      consecutiveLoadFailures += 1;
       setSyncStatus('error', '再試行待ち');
       if(initial){
         state = normalizeState(cachedFallbackState);
         remoteReady = false;
         isDirty = false;
         render();
+        setSyncStatus('error', 'キャッシュ閲覧中');
+        toast('通信できないため端末内の参考データを表示しています。サーバーへは送信しません。');
       }
-      scheduleEmergencyRefresh('最新データの取得に失敗しました');
     }finally{
       loadInFlight = false;
     }
@@ -1140,17 +909,15 @@
   }
 
   drawingCanvas.addEventListener('contextmenu',e=>e.preventDefault());
-  drawingCanvas.addEventListener('pointerdown',async e=>{
+  drawingCanvas.addEventListener('pointerdown',e=>{
     if(MOBILE_VIEW_ONLY) return;
     if(drag || activeStroke || !e.isPrimary) return;
     if(e.pointerType==='mouse' && e.button!==0 && e.button!==5) return;
     e.preventDefault();
     try{ drawingCanvas.setPointerCapture(e.pointerId); }catch(_e){}
-    const pointerId=e.pointerId, clientX=e.clientX, clientY=e.clientY, tool=effectiveTool(e);
-    const ok=await ensureEditLease();
-    if(!ok) return;
-    beginStroke(pointerId,tool,clientX,clientY);
-    if(tool==='erase') showEraserCursor(clientX,clientY);
+    const tool=effectiveTool(e);
+    beginStroke(e.pointerId,tool,e.clientX,e.clientY);
+    if(tool==='erase') showEraserCursor(e.clientX,e.clientY);
   },{passive:false});
 
   drawingCanvas.addEventListener('pointermove',e=>{
@@ -1200,10 +967,9 @@
 
   function attachTrayDrag(el){
     if(MOBILE_VIEW_ONLY) return;
-    el.onpointerdown = async e => {
+    el.onpointerdown = e => {
       e.preventDefault();
       e.stopPropagation();
-      if(!await ensureEditLease()) return;
       startDragFromElement(el, {
         sourceType:el.dataset.type,
         personId:el.dataset.id || null,
@@ -1215,10 +981,9 @@
 
   function attachPlacedDrag(el){
     if(MOBILE_VIEW_ONLY) return;
-    el.onpointerdown = async e => {
+    el.onpointerdown = e => {
       e.preventDefault();
       e.stopPropagation();
-      if(!await ensureEditLease()) return;
       const m = day().magnets.find(x=>x.id===el.dataset.magnetId);
       if(!m) return;
       startDragFromElement(el, {
@@ -1318,8 +1083,7 @@
     if(drag.sourceType==='placed') day().magnets=day().magnets.filter(m=>m.id!==drag.fromMagnetId);
   }
 
-  $('#undoBtn').onclick=async()=>{
-    if(!canEditNow() || !await ensureEditLease()) return;
+  $('#undoBtn').onclick=()=>{
     if(MOBILE_VIEW_ONLY) return;
     if(day().strokes.length){day().strokes.pop();markChanged();redrawDrawingFromState();toast('1つ前の手書きを戻しました');}
     else toast('戻せる手書きがありません');
@@ -1331,30 +1095,26 @@
     markChanged();
   }
 
-  $('#clearDrawingBtn').onclick=async()=>{
-    if(!canEditNow()) return;
-    if(MOBILE_VIEW_ONLY || !await ensureEditLease()) return;
+  $('#clearDrawingBtn').onclick=()=>{
+    if(MOBILE_VIEW_ONLY) return;
     if(confirm('手書きした内容をすべて消去しますか？\nマグネットの配置と氏名一覧は残ります。')){
       clearDrawingCanvas(); toast('手書き分をすべて消去しました');
     }
   };
 
-  $('#resetPeopleBtn').onclick=async()=>{
-    if(!canEditNow()) return;
-    if(MOBILE_VIEW_ONLY || !await ensureEditLease()) return;
+  $('#resetPeopleBtn').onclick=()=>{
+    if(MOBILE_VIEW_ONLY) return;
     day().magnets=day().magnets.filter(m=>m.kind!=='person');
     markChanged(); render();
   };
 
   $('#addPersonBtn').onclick=()=>{
-    if(!canEditNow()) return;
     if(MOBILE_VIEW_ONLY) return;
     modal.classList.add('show'); $('#personName').value='';
     setTimeout(()=>$('#personName').focus(),50);
   };
   document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>modal.classList.remove('show'));
   $('#savePersonBtn').onclick=()=>{
-    if(!canEditNow()) return;
     const name=$('#personName').value.trim();
     if(!name) return;
     state.people.push({id:'p'+Date.now()+Math.random().toString(36).slice(2,6),name});
@@ -1392,20 +1152,13 @@
     boardResizeObserver.observe(boardSurface);
   }
   document.addEventListener('visibilitychange',()=>{
-    if(document.visibilityState==='hidden'){
-      clearTimeout(pollTimer);
-      clearTimeout(retryTimer);
-      return;
-    }
-    consecutiveLoadFailures = 0;
-    loadRemote({initial:!remoteReady}).finally(()=>scheduleNextPoll(POLL_INTERVAL_MS));
+    if(document.visibilityState==='visible') loadRemote();
   });
   window.addEventListener('beforeunload',()=>{
     if(isDirty) saveRemote();
-    stopLockRenew();
   });
   document.addEventListener('dblclick',e=>{
-    if(MOBILE_VIEW_ONLY || !canEditNow()) return;
+    if(MOBILE_VIEW_ONLY) return;
     const chip=e.target.closest('.floating-chip');
     if(!chip) return;
     day().magnets=day().magnets.filter(m=>m.id!==chip.dataset.magnetId);
@@ -1430,7 +1183,7 @@
   render();
   setSyncStatus('loading', MOBILE_VIEW_ONLY ? '● 接続中' : '最新データ確認中');
   setTimeout(()=>loadRemote({initial:true}), 50);
-  scheduleNextPoll(POLL_INTERVAL_MS);
+  pollTimer=setInterval(()=>loadRemote(),POLL_INTERVAL_MS);
 })();
 </script>
 
