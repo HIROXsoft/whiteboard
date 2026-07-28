@@ -236,6 +236,7 @@
   const SAVE_DEBOUNCE_MS = 160;
   const REQUEST_TIMEOUT_MS = 7000;
   const ACK_POLL_MS = 120;
+  const ERASER_AUTO_RETURN_MS = 10000;
   const MOBILE_VIEW_ONLY = (() => {
     const uaMobile = navigator.userAgentData ? navigator.userAgentData.mobile : /Android|iPhone|iPod|Mobile/i.test(navigator.userAgent);
     const coarse = window.matchMedia ? window.matchMedia('(pointer: coarse)').matches : ('ontouchstart' in window);
@@ -273,6 +274,7 @@
   let activeStroke = null;
   let saveTimer = null;
   let pollTimer = null;
+  let eraserAutoReturnTimer = null;
   let isDirty = false;
   let saveInFlight = false;
   let loadInFlight = false;
@@ -827,10 +829,23 @@
     if(announce) toast(erasing?'消しゴムに切り替えました':'手書きに戻しました');
   }
 
+  function scheduleEraserAutoReturn(){
+    clearTimeout(eraserAutoReturnTimer);
+    eraserAutoReturnTimer = null;
+    if(drawingMode !== 'erase') return;
+    eraserAutoReturnTimer = setTimeout(() => {
+      eraserAutoReturnTimer = null;
+      if(drawingMode !== 'erase') return;
+      drawingMode = 'pen';
+      updateModeUi(true);
+    }, ERASER_AUTO_RETURN_MS);
+  }
+
   function toggleDrawingMode(){
     if(MOBILE_VIEW_ONLY) return;
     drawingMode=drawingMode==='pen'?'erase':'pen';
     updateModeUi(true);
+    scheduleEraserAutoReturn();
   }
 
   modeToggle.addEventListener('pointerup',e=>{
