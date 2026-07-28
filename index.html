@@ -236,7 +236,7 @@
   'use strict';
 
   /* GASをウェブアプリとしてデプロイ後、発行URLに置き換えてください。 */
-  const GAS_URL = 'https://script.google.com/macros/s/AKfycbwHqDDE62cLpAYk9ugwuVWr-9ZGYBGtm5ikGZZsiXkvCSKwoaQ7UVQs_xXl_qOgqvT1ZA/exec';
+  const GAS_URL = 'https://script.google.com/macros/s/AKfycbwGDLrP8fGgJ3NiwWL_swX7ZQe0caaprXX8iffF32bnHeYdM6x7Ss1nEJeSh7admuVY7A/exec';
   const API_TOKEN = 'hirox';
   const ROW_COUNT = 16;
   const CACHE_KEY = 'hirox_schedule_board_shared_cache_server_first_v3';
@@ -252,6 +252,10 @@
   const WRITE_LOCK_RETRY_MS = 900;
   const WRITE_LOCK_RENEW_MS = 4000;
   const CONFLICT_BACKUP_KEY = 'hirox_schedule_board_conflict_backup_v1';
+  const AUTO_REFRESH_DELAY_MS = 3000;
+  const AUTO_REFRESH_WINDOW_MS = 60000;
+  const AUTO_REFRESH_MAX_COUNT = 3;
+  const AUTO_REFRESH_GUARD_KEY = 'hirox_schedule_board_auto_refresh_guard_v1';
   const MOBILE_VIEW_ONLY = (() => {
     const uaMobile = navigator.userAgentData ? navigator.userAgentData.mobile : /Android|iPhone|iPod|Mobile/i.test(navigator.userAgent);
     const coarse = window.matchMedia ? window.matchMedia('(pointer: coarse)').matches : ('ontouchstart' in window);
@@ -306,6 +310,8 @@
   let lockRenewTimer = null;
   let editLeasePromise = null;
   let lastInteractionAt = Date.now();
+  let emergencyRefreshTimer = null;
+  let emergencyRefreshScheduled = false;
 
   function emptyDay(){
     return { strokes:[], magnets:[] };
@@ -486,6 +492,62 @@
       return false;
     }
     return true;
+  }
+
+  function readAutoRefreshGuard(){
+    try{
+      const value=JSON.parse(sessionStorage.getItem(AUTO_REFRESH_GUARD_KEY)||'null');
+      if(!value || !Number.isFinite(value.startedAt) || Date.now()-value.startedAt>AUTO_REFRESH_WINDOW_MS){
+        return {startedAt:Date.now(),count:0};
+      }
+      return {startedAt:value.startedAt,count:Number(value.count)||0};
+    }catch(_e){
+      return {startedAt:Date.now(),count:0};
+    }
+  }
+
+  function clearAutoRefreshGuard(){
+    try{ sessionStorage.removeItem(AUTO_REFRESH_GUARD_KEY); }catch(_e){}
+  }
+
+  function scheduleEmergencyRefresh(reason='同期通信に失敗しました'){
+    if(emergencyRefreshScheduled) return;
+    emergencyRefreshScheduled=true;
+
+    // 古い画面の内容を送らないよう、即座に編集と保存を停止します。
+    remoteReady=false;
+    isDirty=false;
+    activeStroke=null;
+    drag=null;
+    clearTimeout(saveTimer);
+    clearTimeout(pollTimer);
+    clearTimeout(retryTimer);
+    clearTimeout(lockRetryTimer);
+    setSyncStatus('error','自動再読込');
+
+    const guard=readAutoRefreshGuard();
+    if(guard.count>=AUTO_REFRESH_MAX_COUNT){
+      setRemoteWriteLock(true,'通信異常が続いているため自動再読込を停止しました。Wi-FiとGAS URLを確認し、接続表示をタップしてください。',true);
+      toast('通信異常が続いています。編集は停止されています。',5000);
+      return;
+    }
+
+    guard.count+=1;
+    try{ sessionStorage.setItem(AUTO_REFRESH_GUARD_KEY,JSON.stringify(guard)); }catch(_e){}
+
+    let remaining=Math.ceil(AUTO_REFRESH_DELAY_MS/1000);
+    const updateMessage=()=>{
+      setRemoteWriteLock(true,`${reason}。安全のため編集を停止し、${remaining}秒後に再読込します。`,false);
+    };
+    updateMessage();
+    emergencyRefreshTimer=setInterval(()=>{
+      remaining-=1;
+      if(remaining>0) updateMessage();
+    },1000);
+    setTimeout(()=>{
+      clearInterval(emergencyRefreshTimer);
+      location.reload();
+    },AUTO_REFRESH_DELAY_MS);
   }
 
   /*
@@ -738,6 +800,7 @@
       lastSavedPayload = payload;
       isDirty = stablePayload() !== payload;
       cacheState();
+      clearAutoRefreshGuard();
       clearWriteLockNotice();
       setSyncStatus(isDirty ? 'saving' : 'ok', isDirty ? '未同期' : '同期済み');
     }catch(e){
@@ -745,7 +808,7 @@
       consecutiveSaveFailures += 1;
       clearWriteLockNotice();
       setSyncStatus('error', '同期失敗');
-      toast('同期に失敗しました。通信状態を確認してください。');
+      scheduleEmergencyRefresh('同期保存に失敗しました');
     }finally{
       saveInFlight = false;
       if(isDirty && !lockRetryTimer){
@@ -772,6 +835,7 @@
       if(res.notModified){
         remoteReady = true;
         isDirty = false;
+        clearAutoRefreshGuard();
         setSyncStatus('ok', '同期済み');
         return;
       }
@@ -799,6 +863,7 @@
         cacheState();
         render();
       }
+      clearAutoRefreshGuard();
       setSyncStatus('ok', '同期済み');
     }catch(e){
       console.error('読み込みエラー', e);
@@ -809,9 +874,8 @@
         remoteReady = false;
         isDirty = false;
         render();
-        setSyncStatus('error', 'キャッシュ閲覧中');
-        toast('通信できないため端末内の参考データを表示しています。サーバーへは送信しません。');
       }
+      scheduleEmergencyRefresh('最新データの取得に失敗しました');
     }finally{
       loadInFlight = false;
     }
