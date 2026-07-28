@@ -102,6 +102,15 @@
   .sync-badge.ok{background:#e8f7ec;color:#176b32;border-color:#9dd4aa}
   .sync-badge.saving,.sync-badge.loading{background:#fff7d6;color:#765b00;border-color:#ddc86b}
   .sync-badge.error{background:#fff0f0;color:#a11d1d;border-color:#e2aaaa}
+  .sync-badge.locked{background:#fff1cc;color:#7a4b00;border-color:#e2ad42}
+  .sync-badge.conflict{background:#ffe3e3;color:#981b1b;border-color:#df8b8b}
+  .write-lock-banner{position:fixed;left:50%;top:72px;transform:translateX(-50%);z-index:250;display:none;align-items:center;gap:10px;max-width:min(720px,92vw);padding:11px 18px;border:2px solid #e0a22d;border-radius:14px;background:#fff3cd;color:#6e4700;font-weight:900;box-shadow:0 8px 24px rgba(0,0,0,.22);text-align:center}
+  .write-lock-banner.show{display:flex}
+  .write-lock-banner.conflict{border-color:#d94b4b;background:#ffe6e6;color:#8b1717}
+  .write-lock-spinner{width:18px;height:18px;border:3px solid currentColor;border-right-color:transparent;border-radius:50%;animation:writeLockSpin .8s linear infinite;flex:none}
+  .write-lock-banner.conflict .write-lock-spinner{display:none}
+  @keyframes writeLockSpin{to{transform:rotate(360deg)}}
+  body.remote-write-locked .drawing-canvas,body.remote-write-locked .floating-chip,body.remote-write-locked .name-chip,body.remote-write-locked .status-chip{cursor:not-allowed!important}
   .board-surface .drawing-canvas{cursor:crosshair}
   .board-surface.erase-mode{outline:4px solid rgba(224,108,0,.62);outline-offset:-4px}
   .board-surface.erase-mode .drawing-canvas{cursor:none}
@@ -211,6 +220,7 @@
     </section>
   </main>
 </div>
+<div id="writeLockBanner" class="write-lock-banner" role="status" aria-live="assertive"><span class="write-lock-spinner"></span><span id="writeLockText">他の端末が保存中です。完了まで操作をお待ちください。</span></div>
 
 <div class="modal" id="personModal">
   <div class="dialog">
@@ -226,7 +236,7 @@
   'use strict';
 
   /* GASをウェブアプリとしてデプロイ後、発行URLに置き換えてください。 */
-  const GAS_URL = 'https://script.google.com/macros/s/AKfycbxqjv0CMMai1DxyfdKQomcbY1rinESjtrGpDmM2YvZ34C7mZbQiO0kQABc_XVbwiZ_2_Q/exec';
+  const GAS_URL = 'https://script.google.com/macros/s/AKfycbwGDLrP8fGgJ3NiwWL_swX7ZQe0caaprXX8iffF32bnHeYdM6x7Ss1nEJeSh7admuVY7A/exec';
   const API_TOKEN = 'hirox';
   const ROW_COUNT = 16;
   const CACHE_KEY = 'hirox_schedule_board_shared_cache_server_first_v3';
@@ -238,6 +248,8 @@
   const ACK_POLL_MS = 750;
   const MAX_RETRY_DELAY_MS = 30000;
   const ERASER_AUTO_RETURN_MS = 10000;
+  const WRITE_LOCK_RETRY_MS = 1200;
+  const CONFLICT_BACKUP_KEY = 'hirox_schedule_board_conflict_backup_v1';
   const MOBILE_VIEW_ONLY = (() => {
     const uaMobile = navigator.userAgentData ? navigator.userAgentData.mobile : /Android|iPhone|iPod|Mobile/i.test(navigator.userAgent);
     const coarse = window.matchMedia ? window.matchMedia('(pointer: coarse)').matches : ('ontouchstart' in window);
@@ -260,6 +272,8 @@
   const modeBanner = $('#modeBanner');
   const eraserCursor = $('#eraserCursor');
   const eraserModeMark = $('#eraserModeMark');
+  const writeLockBanner = $('#writeLockBanner');
+  const writeLockText = $('#writeLockText');
 
   if(MOBILE_VIEW_ONLY){
     document.body.classList.add('mobile-view-only');
@@ -284,6 +298,9 @@
   let loadInFlight = false;
   let lastSavedPayload = '';
   let clientId = getClientId();
+  let remoteWriteLocked = false;
+  let writeLockToken = '';
+  let lockRetryTimer = null;
 
   function emptyDay(){
     return { strokes:[], magnets:[] };
@@ -432,11 +449,75 @@
     return state.days.board;
   }
 
-  function toast(msg){
+  function toast(msg, durationMs=1500){
     const t=$('#toast');
     t.textContent=msg;
     t.classList.add('show');
-    setTimeout(()=>t.classList.remove('show'),1500);
+    setTimeout(()=>t.classList.remove('show'),durationMs);
+  }
+
+  function setRemoteWriteLock(locked, message='', conflict=false){
+    remoteWriteLocked = Boolean(locked);
+    document.body.classList.toggle('remote-write-locked', remoteWriteLocked);
+    if(writeLockBanner){
+      writeLockBanner.classList.toggle('show', remoteWriteLocked || conflict);
+      writeLockBanner.classList.toggle('conflict', conflict);
+    }
+    if(writeLockText && message) writeLockText.textContent=message;
+  }
+
+  function clearWriteLockNotice(){
+    remoteWriteLocked=false;
+    document.body.classList.remove('remote-write-locked');
+    if(writeLockBanner){
+      writeLockBanner.classList.remove('show','conflict');
+    }
+  }
+
+  function canEditNow(showNotice=true){
+    if(MOBILE_VIEW_ONLY) return false;
+    if(remoteWriteLocked){
+      if(showNotice) toast('他の端末が保存中です。少しお待ちください。',2200);
+      return false;
+    }
+    return true;
+  }
+
+  async function acquireWriteLock(){
+    const res=await jsonp({action:'acquire',clientId},6000);
+    if(!res || !res.ok) throw new Error(res && res.error ? res.error : 'lock_failed');
+    if(res.locked){
+      writeLockToken='';
+      setRemoteWriteLock(true,'他の端末が保存中です。完了後に自動で再試行します。');
+      setSyncStatus('locked','他端末が保存中');
+      return false;
+    }
+    writeLockToken=String(res.lockToken||'');
+    clearWriteLockNotice();
+    return Boolean(writeLockToken);
+  }
+
+  function saveConflictBackup(payload, ack){
+    try{
+      localStorage.setItem(CONFLICT_BACKUP_KEY,JSON.stringify({savedAt:new Date().toISOString(),baseRevision:revision,serverRevision:Number(ack?.revision||0),payload}));
+    }catch(e){}
+  }
+
+  function applyConflictState(ack, payload){
+    saveConflictBackup(payload,ack);
+    if(ack && ack.state){
+      state=normalizeState(ack.state);
+      revision=Number(ack.revision||revision);
+      remoteReady=true;
+      isDirty=false;
+      lastSavedPayload=stablePayload();
+      cacheState();
+      render();
+    }
+    setRemoteWriteLock(false,'他の端末で先に更新されたため、最新内容を反映しました。直前の入力は保存していません。',true);
+    setSyncStatus('conflict','他端末更新を反映');
+    toast('他の端末の更新を反映しました。直前の入力は上書き防止のため保存されませんでした。',5200);
+    setTimeout(()=>{ clearWriteLockNotice(); setSyncStatus('ok','同期済み'); },5200);
   }
 
   function markChanged(delayMs = SAVE_DEBOUNCE_MS){
@@ -579,31 +660,59 @@
     const payload = stablePayload();
     if(payload === lastSavedPayload){
       isDirty = false;
+      clearWriteLockNotice();
       setSyncStatus('ok', '同期済み');
       return;
     }
 
     saveInFlight = true;
-    setSyncStatus('saving', '同期中…');
+    clearTimeout(lockRetryTimer);
     const requestId = clientId + '_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,7);
     try{
-      await postByHiddenForm({ action:'save', token:API_TOKEN, requestId, clientId, revision, payload });
+      const acquired=await acquireWriteLock();
+      if(!acquired){
+        saveInFlight=false;
+        lockRetryTimer=setTimeout(saveRemote,WRITE_LOCK_RETRY_MS);
+        return;
+      }
+
+      setSyncStatus('saving', '書込ロック中…');
+      setRemoteWriteLock(false);
+      await postByHiddenForm({ action:'save', token:API_TOKEN, requestId, clientId, revision, lockToken:writeLockToken, payload });
       const ack = await waitForAck(requestId);
+      writeLockToken='';
+
+      if(ack && ack.conflict){
+        applyConflictState(ack,payload);
+        consecutiveSaveFailures=0;
+        return;
+      }
+      if(ack && ack.locked){
+        setRemoteWriteLock(true,'他の端末が保存中です。完了後に自動で再試行します。');
+        setSyncStatus('locked','他端末が保存中');
+        saveInFlight=false;
+        lockRetryTimer=setTimeout(saveRemote,WRITE_LOCK_RETRY_MS);
+        return;
+      }
       if(!ack || !ack.ok) throw new Error(ack && ack.error ? ack.error : 'save_failed');
+
       revision = Number(ack.revision || revision + 1);
       consecutiveSaveFailures = 0;
       lastSavedPayload = payload;
       isDirty = stablePayload() !== payload;
       cacheState();
+      clearWriteLockNotice();
       setSyncStatus(isDirty ? 'saving' : 'ok', isDirty ? '未同期' : '同期済み');
     }catch(e){
       console.error('保存エラー', e);
+      writeLockToken='';
       consecutiveSaveFailures += 1;
+      clearWriteLockNotice();
       setSyncStatus('error', '同期失敗');
       toast('同期に失敗しました。通信状態を確認してください。');
     }finally{
       saveInFlight = false;
-      if(isDirty){
+      if(isDirty && !lockRetryTimer){
         clearTimeout(saveTimer);
         saveTimer = setTimeout(saveRemote, retryDelay(consecutiveSaveFailures));
       }
@@ -1106,6 +1215,7 @@
   }
 
   $('#undoBtn').onclick=()=>{
+    if(!canEditNow()) return;
     if(MOBILE_VIEW_ONLY) return;
     if(day().strokes.length){day().strokes.pop();markChanged();redrawDrawingFromState();toast('1つ前の手書きを戻しました');}
     else toast('戻せる手書きがありません');
@@ -1118,6 +1228,7 @@
   }
 
   $('#clearDrawingBtn').onclick=()=>{
+    if(!canEditNow()) return;
     if(MOBILE_VIEW_ONLY) return;
     if(confirm('手書きした内容をすべて消去しますか？\nマグネットの配置と氏名一覧は残ります。')){
       clearDrawingCanvas(); toast('手書き分をすべて消去しました');
@@ -1125,18 +1236,21 @@
   };
 
   $('#resetPeopleBtn').onclick=()=>{
+    if(!canEditNow()) return;
     if(MOBILE_VIEW_ONLY) return;
     day().magnets=day().magnets.filter(m=>m.kind!=='person');
     markChanged(); render();
   };
 
   $('#addPersonBtn').onclick=()=>{
+    if(!canEditNow()) return;
     if(MOBILE_VIEW_ONLY) return;
     modal.classList.add('show'); $('#personName').value='';
     setTimeout(()=>$('#personName').focus(),50);
   };
   document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>modal.classList.remove('show'));
   $('#savePersonBtn').onclick=()=>{
+    if(!canEditNow()) return;
     const name=$('#personName').value.trim();
     if(!name) return;
     state.people.push({id:'p'+Date.now()+Math.random().toString(36).slice(2,6),name});
@@ -1186,7 +1300,7 @@
     if(isDirty) saveRemote();
   });
   document.addEventListener('dblclick',e=>{
-    if(MOBILE_VIEW_ONLY) return;
+    if(MOBILE_VIEW_ONLY || !canEditNow()) return;
     const chip=e.target.closest('.floating-chip');
     if(!chip) return;
     day().magnets=day().magnets.filter(m=>m.id!==chip.dataset.magnetId);
