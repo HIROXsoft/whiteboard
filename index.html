@@ -110,7 +110,7 @@
   .write-lock-spinner{width:18px;height:18px;border:3px solid currentColor;border-right-color:transparent;border-radius:50%;animation:writeLockSpin .8s linear infinite;flex:none}
   .write-lock-banner.conflict .write-lock-spinner{display:none}
   @keyframes writeLockSpin{to{transform:rotate(360deg)}}
-  body.remote-write-locked .drawing-canvas,body.remote-write-locked .floating-chip,body.remote-write-locked .name-chip,body.remote-write-locked .status-chip{cursor:not-allowed!important}
+  body.remote-write-locked{cursor:progress}
   .board-surface .drawing-canvas{cursor:crosshair}
   .board-surface.erase-mode{outline:4px solid rgba(224,108,0,.62);outline-offset:-4px}
   .board-surface.erase-mode .drawing-canvas{cursor:none}
@@ -236,7 +236,7 @@
   'use strict';
 
   /* GASをウェブアプリとしてデプロイ後、発行URLに置き換えてください。 */
-  const GAS_URL = 'https://script.google.com/macros/s/AKfycbzFrC5rtU_CTHWzJwVFE0ZNaoSyFMTmXybmNVS86DP_VO2-ldyjNjDoRAezMVTBVVEc/exec';
+  const GAS_URL = 'https://script.google.com/macros/s/AKfycbwHqDDE62cLpAYk9ugwuVWr-9ZGYBGtm5ikGZZsiXkvCSKwoaQ7UVQs_xXl_qOgqvT1ZA/exec';
   const API_TOKEN = 'hirox';
   const ROW_COUNT = 16;
   const CACHE_KEY = 'hirox_schedule_board_shared_cache_server_first_v3';
@@ -488,68 +488,59 @@
     return true;
   }
 
-  function stopLockRenew(){
-    clearInterval(lockRenewTimer);
-    lockRenewTimer=null;
-  }
-
-  function startLockRenew(){
-    stopLockRenew();
-    if(!writeLockToken) return;
-    lockRenewTimer=setInterval(async()=>{
-      if(!writeLockToken || document.visibilityState==='hidden') return;
-      try{
-        const res=await jsonp({action:'renew',clientId,lockToken:writeLockToken},5000);
-        if(!res || !res.ok || res.locked){
-          stopLockRenew();
-          writeLockToken='';
-          setRemoteWriteLock(true,'編集権の更新に失敗しました。最新状態を確認しています。');
-          setSyncStatus('locked','編集権確認中');
-        }
-      }catch(_e){}
-    },WRITE_LOCK_RENEW_MS);
-  }
-
-  async function acquireWriteLock(){
-    if(writeLockToken) return true;
-    if(editLeasePromise) return editLeasePromise;
-    editLeasePromise=(async()=>{
-      setSyncStatus('loading','編集権を確認中…');
-      const res=await jsonp({action:'acquire',clientId},7000);
-      if(!res || !res.ok) throw new Error(res && res.error ? res.error : 'lock_failed');
-      if(res.locked){
-        writeLockToken='';
-        setRemoteWriteLock(true,'他の端末が編集中です。完了後に操作できます。');
-        setSyncStatus('locked','他端末が編集中');
-        return false;
-      }
-      writeLockToken=String(res.lockToken||'');
-      clearWriteLockNotice();
-      startLockRenew();
-      setSyncStatus('ok','編集できます');
-      return Boolean(writeLockToken);
-    })();
-    try{return await editLeasePromise;}finally{editLeasePromise=null;}
-  }
-
-  async function releaseWriteLock(){
-    stopLockRenew();
-    const token=writeLockToken;
-    writeLockToken='';
-    if(!token) return;
-    try{await jsonp({action:'release',clientId,lockToken:token},5000);}catch(_e){}
-  }
-
+  /*
+   * 編集開始前の端末間ロックは使用しません。
+   * 入力は即時許可し、保存処理だけをGAS側のLockServiceで直列化します。
+   */
+  function stopLockRenew(){}
+  function startLockRenew(){}
+  async function acquireWriteLock(){ return true; }
+  async function releaseWriteLock(){}
   async function ensureEditLease(){
     if(MOBILE_VIEW_ONLY || !remoteReady) return false;
     lastInteractionAt=Date.now();
-    try{return await acquireWriteLock();}
-    catch(e){
-      console.error('編集権取得エラー',e);
-      setSyncStatus('error','接続再試行中');
-      toast('同期サーバーへ接続できません。少し待ってから再操作してください。',2600);
-      return false;
-    }
+    clearWriteLockNotice();
+    return true;
+  }
+
+  function strokeKey(st){
+    return JSON.stringify({
+      tool:st && st.tool==='erase'?'erase':'pen',
+      width:Number(st && st.width || 0),
+      points:Array.isArray(st && st.points)?st.points:[]
+    });
+  }
+
+  function mergeConcurrentState(remoteState, localState){
+    const remote=normalizeState(remoteState);
+    const local=normalizeState(localState);
+    const peopleMap=new Map();
+    remote.people.forEach(p=>peopleMap.set(String(p.id),p));
+    local.people.forEach(p=>peopleMap.set(String(p.id),p));
+
+    const magnetMap=new Map();
+    remote.days.board.magnets.forEach(m=>magnetMap.set(String(m.id),m));
+    local.days.board.magnets.forEach(m=>magnetMap.set(String(m.id),m));
+
+    const strokeMap=new Map();
+    remote.days.board.strokes.forEach(st=>strokeMap.set(strokeKey(st),st));
+    local.days.board.strokes.forEach(st=>strokeMap.set(strokeKey(st),st));
+
+    return normalizeState({
+      ...remote,
+      ...local,
+      people:Array.from(peopleMap.values()),
+      days:{
+        ...remote.days,
+        ...local.days,
+        board:{
+          ...remote.days.board,
+          ...local.days.board,
+          magnets:Array.from(magnetMap.values()),
+          strokes:Array.from(strokeMap.values())
+        }
+      }
+    });
   }
 
   function saveConflictBackup(payload, ack){
@@ -560,19 +551,24 @@
 
   function applyConflictState(ack, payload){
     saveConflictBackup(payload,ack);
+    let localState=null;
+    try{ localState=normalizeState(JSON.parse(payload)); }catch(_e){ localState=normalizeState(state); }
     if(ack && ack.state){
-      state=normalizeState(ack.state);
+      state=mergeConcurrentState(ack.state,localState);
       revision=Number(ack.revision||revision);
       remoteReady=true;
-      isDirty=false;
-      lastSavedPayload=stablePayload();
+      isDirty=true;
       cacheState();
       render();
     }
-    setRemoteWriteLock(false,'他の端末で先に更新されたため、最新内容を反映しました。直前の入力は保存していません。',true);
-    setSyncStatus('conflict','他端末更新を反映');
-    toast('他の端末の更新を反映しました。直前の入力は上書き防止のため保存されませんでした。',5200);
-    setTimeout(()=>{ clearWriteLockNotice(); setSyncStatus('ok','同期済み'); },5200);
+    setRemoteWriteLock(false,'ほぼ同時の更新を検出しました。両方の内容を統合して再保存しています。',true);
+    setSyncStatus('saving','同時更新を統合中');
+    toast('他端末の更新と現在の入力を統合しています。',2800);
+    clearTimeout(saveTimer);
+    saveTimer=setTimeout(()=>{
+      clearWriteLockNotice();
+      saveRemote();
+    },350);
   }
 
   function markChanged(delayMs = SAVE_DEBOUNCE_MS){
@@ -725,29 +721,14 @@
     clearTimeout(lockRetryTimer);
     const requestId = clientId + '_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,7);
     try{
-      const acquired=writeLockToken ? true : await acquireWriteLock();
-      if(!acquired){
-        saveInFlight=false;
-        lockRetryTimer=setTimeout(saveRemote,WRITE_LOCK_RETRY_MS);
-        return;
-      }
-
-      setSyncStatus('saving', '書込ロック中…');
+      setSyncStatus('saving', '同期中…');
       setRemoteWriteLock(false);
-      await postByHiddenForm({ action:'save', token:API_TOKEN, requestId, clientId, revision, lockToken:writeLockToken, payload });
+      await postByHiddenForm({ action:'save', token:API_TOKEN, requestId, clientId, revision, payload });
       const ack = await waitForAck(requestId);
-      stopLockRenew();
 
       if(ack && ack.conflict){
         applyConflictState(ack,payload);
         consecutiveSaveFailures=0;
-        return;
-      }
-      if(ack && ack.locked){
-        setRemoteWriteLock(true,'他の端末が保存中です。完了後に自動で再試行します。');
-        setSyncStatus('locked','他端末が保存中');
-        saveInFlight=false;
-        lockRetryTimer=setTimeout(saveRemote,WRITE_LOCK_RETRY_MS);
         return;
       }
       if(!ack || !ack.ok) throw new Error(ack && ack.error ? ack.error : 'save_failed');
@@ -761,14 +742,12 @@
       setSyncStatus(isDirty ? 'saving' : 'ok', isDirty ? '未同期' : '同期済み');
     }catch(e){
       console.error('保存エラー', e);
-      await releaseWriteLock();
       consecutiveSaveFailures += 1;
       clearWriteLockNotice();
       setSyncStatus('error', '同期失敗');
       toast('同期に失敗しました。通信状態を確認してください。');
     }finally{
       saveInFlight = false;
-      if(!isDirty) await releaseWriteLock();
       if(isDirty && !lockRetryTimer){
         clearTimeout(saveTimer);
         saveTimer = setTimeout(saveRemote, retryDelay(consecutiveSaveFailures));
