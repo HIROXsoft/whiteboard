@@ -181,6 +181,7 @@
       <div class="magnet-box">
         <div class="status-chip status-direct" data-type="status" data-value="直行">直行</div>
         <div class="status-chip status-return" data-type="status" data-value="直帰">直帰</div>
+        <div class="status-chip status-return" data-type="status" data-value="帰宅">帰宅</div>
         <div class="status-chip status-trip" data-type="status" data-value="出張">出張</div>
         <div id="floorPicker" class="floor-picker">
           <button id="floorPickerToggle" class="floor-picker-toggle" type="button" aria-expanded="false">階を選ぶ</button>
@@ -236,7 +237,6 @@
   const SAVE_DEBOUNCE_MS = 160;
   const REQUEST_TIMEOUT_MS = 7000;
   const ACK_POLL_MS = 120;
-  const ERASER_AUTO_RETURN_MS = 10000;
   const MOBILE_VIEW_ONLY = (() => {
     const uaMobile = navigator.userAgentData ? navigator.userAgentData.mobile : /Android|iPhone|iPod|Mobile/i.test(navigator.userAgent);
     const coarse = window.matchMedia ? window.matchMedia('(pointer: coarse)').matches : ('ontouchstart' in window);
@@ -274,7 +274,6 @@
   let activeStroke = null;
   let saveTimer = null;
   let pollTimer = null;
-  let eraserAutoReturnTimer = null;
   let isDirty = false;
   let saveInFlight = false;
   let loadInFlight = false;
@@ -829,23 +828,10 @@
     if(announce) toast(erasing?'消しゴムに切り替えました':'手書きに戻しました');
   }
 
-  function scheduleEraserAutoReturn(){
-    clearTimeout(eraserAutoReturnTimer);
-    eraserAutoReturnTimer = null;
-    if(drawingMode !== 'erase') return;
-    eraserAutoReturnTimer = setTimeout(() => {
-      eraserAutoReturnTimer = null;
-      if(drawingMode !== 'erase') return;
-      drawingMode = 'pen';
-      updateModeUi(true);
-    }, ERASER_AUTO_RETURN_MS);
-  }
-
   function toggleDrawingMode(){
     if(MOBILE_VIEW_ONLY) return;
     drawingMode=drawingMode==='pen'?'erase':'pen';
     updateModeUi(true);
-    scheduleEraserAutoReturn();
   }
 
   modeToggle.addEventListener('pointerup',e=>{
