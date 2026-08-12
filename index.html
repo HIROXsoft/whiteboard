@@ -157,6 +157,17 @@
     .tool-group{gap:4px}
     .btn{padding:7px 8px}
   }
+
+  body.sync-locked .tray,
+  body.sync-locked .drawing-canvas,
+  body.sync-locked .floating-chip,
+  body.sync-locked #undoBtn,
+  body.sync-locked #clearDrawingBtn,
+  body.sync-locked #addPersonBtn,
+  body.sync-locked #resetPeopleBtn,
+  body.sync-locked .eraser-mode-mark,
+  body.sync-locked .board-title{pointer-events:none!important;}
+  body.sync-locked .tray, body.sync-locked .board-surface{opacity:.72;}
 </style>
 </head>
 <body>
@@ -232,11 +243,11 @@
   'use strict';
 
   /* GASをウェブアプリとしてデプロイ後、発行URLに置き換えてください。 */
-  const GAS_URL = 'https://script.google.com/macros/s/AKfycbxay8CMmlDHr-iMVdPF5mqEfkBxZ5t2ZAEzmY37fiKAysVCSB3Lqp_9eoL0lIyyuYzBwg/exec';
+  const GAS_URL = 'https://script.google.com/macros/s/AKfycbwNgI2fAwhGWOGPTnkKdhkPfE-Oe9Z9O5zHmz5bPjfT331j9hAl8aFGALv3MjclDRf6Sg/exec';
   const API_TOKEN = 'hirox';
   const ROW_COUNT = 16;
-  const CACHE_KEY = 'hirox_schedule_board_cache_v8';
-  const PENDING_KEY = 'hirox_schedule_board_pending_v8';
+  const CACHE_KEY = 'hirox_schedule_board_cache_v9_disabled';
+  const PENDING_KEY = 'hirox_schedule_board_pending_v9_disabled';
   const LEGACY_PENDING_KEY = 'hirox_schedule_board_pending_v1';
   const LEGACY_PENDING_BACKUP_KEY = 'hirox_schedule_board_pending_v1_quarantine';
   const DIAG_KEY = 'hirox_schedule_board_last_diag_v8';
@@ -281,7 +292,8 @@
   }
 
   quarantineLegacyPending();
-  const cachedFallback = loadCachedSnapshot();
+  document.body.classList.add('sync-locked');
+  const cachedFallback = null;
   let state = defaultState();
   let revision = 0;
   let generationId = '';
@@ -331,50 +343,24 @@
     return safe;
   }
 
-  function loadCachedSnapshot(){
-    try{
-      const raw=localStorage.getItem(CACHE_KEY);
-      if(!raw) return null;
-      const snap=JSON.parse(raw);
-      if(!snap || !snap.state) return null;
-      return {
-        state:normalizeState(snap.state),
-        generationId:String(snap.generationId||''),
-        revision:Number(snap.revision||0),
-        cachedAt:Number(snap.cachedAt||0)
-      };
-    }catch(e){ return null; }
-  }
-
-  function cacheState(){
-    try{
-      localStorage.setItem(CACHE_KEY, JSON.stringify({
-        state:compactState(), generationId, revision, cachedAt:Date.now()
-      }));
-    }catch(e){ console.warn('ローカル予備キャッシュの保存に失敗しました。', e); }
-  }
-
-  function quarantineLegacyPending(){
-    try{
-      const old=localStorage.getItem(LEGACY_PENDING_KEY);
-      if(old && !localStorage.getItem(LEGACY_PENDING_BACKUP_KEY)){
-        localStorage.setItem(LEGACY_PENDING_BACKUP_KEY,old);
-      }
-      if(old) localStorage.removeItem(LEGACY_PENDING_KEY);
-    }catch(e){}
-  }
-
-  function clearLegacySharedCaches(){
-    // v8以前のキャッシュは自動同期には一切使わない。表示復旧にも使わず、旧データ復活を防止する。
+  // v9: サーバーを唯一の正本とする。過去のブラウザ状態は同期に一切使用しない。
+  function purgePersistentSyncStorage(){
     try{
       const removeKeys=[];
       for(let i=0;i<localStorage.length;i++){
         const key=localStorage.key(i);
-        if(key && key.startsWith('hirox_schedule_board_shared_cache_')) removeKeys.push(key);
+        if(!key) continue;
+        if(key==='hirox_schedule_board_client_id') continue;
+        if(key.startsWith('hirox_schedule_board_')) removeKeys.push(key);
       }
       removeKeys.forEach(key=>localStorage.removeItem(key));
-    }catch(e){}
+    }catch(e){ console.warn('旧同期キャッシュの削除に失敗しました。',e); }
   }
+
+  function loadCachedSnapshot(){ return null; }
+  function cacheState(){ /* 永続キャッシュへ状態を書かない */ }
+  function quarantineLegacyPending(){ purgePersistentSyncStorage(); }
+  function clearLegacySharedCaches(){ purgePersistentSyncStorage(); }
 
   function getClientId(){
     const key = 'hirox_schedule_board_client_id';
@@ -483,50 +469,24 @@
     return JSON.parse(JSON.stringify(normalizeState(value)));
   }
 
-  function readPendingLocal(){
-    try{
-      const raw=localStorage.getItem(PENDING_KEY);
-      if(!raw) return null;
-      const p=JSON.parse(raw);
-      if(!p || !p.state || !p.generationId) return null;
-      return p;
-    }catch(e){ return null; }
-  }
-
-  function quarantinePendingLocal(pending, reason='generation_changed'){
-    if(!pending) return;
-    try{
-      const prefix='hirox_schedule_board_pending_quarantine_';
-      const key=prefix+Date.now();
-      localStorage.setItem(key,JSON.stringify({...pending,quarantinedAt:Date.now(),reason}));
-      localStorage.removeItem(PENDING_KEY);
-      const keys=[];
-      for(let i=0;i<localStorage.length;i++){
-        const k=localStorage.key(i); if(k && k.startsWith(prefix)) keys.push(k);
-      }
-      keys.sort().reverse().slice(3).forEach(k=>localStorage.removeItem(k));
-    }catch(e){ clearPendingLocal(); }
-  }
-
-  function writePendingLocal(){
-    if(MOBILE_VIEW_ONLY || !isDirty || dirtyKind!=='user' || !generationId) return;
-    try{
-      localStorage.setItem(PENDING_KEY, JSON.stringify({
-        generationId,
-        state:compactState(),
-        baseState:lastSyncedState,
-        baseRevision:revision,
-        savedAt:Date.now()
-      }));
-    }catch(e){ console.warn('未同期データの退避に失敗しました。',e); }
-  }
-
+  // 未同期状態は現在タブのメモリだけに保持する。
+  // localStorage/sessionStorage へ保存しないため、古いブラウザ状態が後日サーバーを上書きする経路が無い。
+  function readPendingLocal(){ return null; }
+  function quarantinePendingLocal(){ clearPendingLocal(); }
+  function writePendingLocal(){ /* intentionally disabled */ }
   function clearPendingLocal(){
-    try{ localStorage.removeItem(PENDING_KEY); }catch(e){}
+    try{
+      localStorage.removeItem(PENDING_KEY);
+      localStorage.removeItem(CACHE_KEY);
+    }catch(e){}
   }
 
   function markChanged(delayMs = SAVE_DEBOUNCE_MS, kind='user'){
     if(MOBILE_VIEW_ONLY) return;
+    if(!remoteReady){
+      setSyncStatus('loading','サーバー確認待ち');
+      return;
+    }
     isDirty = true;
     if(kind==='user') dirtyKind='user';
     cacheState();
@@ -797,19 +757,18 @@
     generationId=String(remoteGeneration||'');
     remoteReady=true; isDirty=false; dirtyKind='user'; pendingSave=null; saveRetryCount=0;
     lastSyncedState=cloneState(state); lastSavedPayload=stablePayload();
+    document.body.classList.remove('sync-locked');
     clearPendingLocal(); cacheState(); render();
   }
 
   async function handleGenerationMismatch(localSnapshot, reason='generation_mismatch'){
-    const oldPending=readPendingLocal() || (localSnapshot ? {
-      generationId, state:localSnapshot, baseState:lastSyncedState, baseRevision:revision, savedAt:Date.now()
-    } : null);
-    if(oldPending) quarantinePendingLocal(oldPending,reason);
+    // 世代変更時はローカル内容を自動復元・自動統合しない。サーバーが常に勝つ。
+    pendingSave=null; isDirty=false; dirtyKind='user'; clearPendingLocal();
     const res=await jsonp({action:'load',clientId,since:-1,generation:'',verify:'1'},REQUEST_TIMEOUT_MS);
     if(!res || !res.ok) throw new Error('generation_reload_failed');
     adoptRemoteState(res.state||defaultState(),res.revision,res.generationId);
     setSyncStatus('ok','同期済み');
-    toast('サーバーの新しい世代を検出しました。古い未同期データは自動復元せず保留しました。');
+    toast('サーバーが初期化・更新されたため、端末の古い状態は破棄しました。');
     scheduleDrawingMaintenanceIfNeeded();
   }
 
@@ -939,21 +898,10 @@
 
       const remoteState=normalizeState(res.state||defaultState());
       if(initial){
-        const pending=readPendingLocal();
-        if(pending && String(pending.generationId||'')===remoteGeneration){
-          state=mergeLocalChanges(pending.baseState||defaultState(),pending.state,remoteState);
-          revision=remoteRevision; generationId=remoteGeneration;
-          lastSyncedState=cloneState(remoteState); lastSavedPayload=JSON.stringify(compactStateFrom(remoteState));
-          remoteReady=true; isDirty=true; dirtyKind='user'; pendingSave=null;
-          cacheState(); writePendingLocal(); render();
-          setSyncStatus('saving','未同期データ復旧中');
-          clearTimeout(saveTimer); saveTimer=setTimeout(saveRemote,700);
-        }else{
-          if(pending) quarantinePendingLocal(pending,'initial_generation_mismatch');
-          adoptRemoteState(remoteState,remoteRevision,remoteGeneration);
-          setSyncStatus('ok','同期済み');
-          scheduleDrawingMaintenanceIfNeeded();
-        }
+        // 初回起動は必ずサーバー状態をそのまま採用する。ブラウザキャッシュとのマージは禁止。
+        adoptRemoteState(remoteState,remoteRevision,remoteGeneration);
+        setSyncStatus('ok','同期済み');
+        scheduleDrawingMaintenanceIfNeeded();
       }else if(remoteGeneration!==generationId){
         await handleGenerationMismatch(null,'poll_generation_changed');
       }else if(remoteRevision>revision){
@@ -973,18 +921,10 @@
     }catch(e){
       console.error('読み込みエラー',e);
       if(initial){
-        const pending=readPendingLocal();
-        if(pending){
-          state=normalizeState(pending.state); generationId=String(pending.generationId||''); revision=Number(pending.baseRevision||0);
-          isDirty=true; dirtyKind='user';
-        }else if(cachedFallback){
-          state=normalizeState(cachedFallback.state); generationId=cachedFallback.generationId; revision=cachedFallback.revision;
-          isDirty=false;
-        }else{
-          state=defaultState(); generationId=''; revision=0; isDirty=false;
-        }
-        remoteReady=false; render();
-        setSyncStatus('error',pending?'未同期データ保持中':'キャッシュ閲覧中');
+        // サーバーを確認できない時は古いキャッシュを表示せず、編集も許可しない。
+        state=defaultState(); generationId=''; revision=0; isDirty=false; pendingSave=null;
+        remoteReady=false; document.body.classList.add('sync-locked'); render();
+        setSyncStatus('error','サーバー接続待ち');
       }else setSyncStatus('error','再接続待ち');
     }finally{ loadInFlight=false; }
   }
@@ -1654,7 +1594,7 @@
   clearLegacySharedCaches();
   updateModeUi(false);
   render();
-  setSyncStatus('loading', MOBILE_VIEW_ONLY ? '● 接続中' : '最新データ確認中');
+  setSyncStatus('loading', MOBILE_VIEW_ONLY ? '● 接続中' : 'サーバー正本確認中');
   setTimeout(()=>loadRemote({initial:true,forceVerify:true}), 50);
   pollTimer=setInterval(()=>{
     pollCount++;
