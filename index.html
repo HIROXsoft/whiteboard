@@ -250,7 +250,7 @@
   'use strict';
 
   /* GASをウェブアプリとしてデプロイ後、発行URLに置き換えてください。 */
-  const GAS_URL = 'https://script.google.com/macros/s/AKfycbwNgI2fAwhGWOGPTnkKdhkPfE-Oe9Z9O5zHmz5bPjfT331j9hAl8aFGALv3MjclDRf6Sg/exec';
+  const GAS_URL = 'https://script.google.com/macros/s/AKfycbxYU5saaeCR0KeunRteI6oP3DsQ_pmIMmEAAFZ9XlP4FGzvJ0-SxxN7PI1BFS3Ei1rNHg/exec';
   const API_TOKEN = 'hirox';
   const ROW_COUNT = 16;
   const CACHE_KEY = 'hirox_schedule_board_cache_v9_disabled';
@@ -474,6 +474,19 @@
 
   function cloneState(value){
     return JSON.parse(JSON.stringify(normalizeState(value)));
+  }
+
+  function stateHasContent(value){
+    const s=normalizeState(cloneState(value||defaultState()));
+    const b=s.days.board;
+    return s.people.length>0 || b.magnets.length>0 || b.strokes.length>0 || Boolean(b.drawingBase);
+  }
+
+  function suspiciousEmptyRemote(remoteState, remoteRevision, updatedBy){
+    // 新規setup(revision 0)と明示的manual_resetだけは正当な空状態として許可する。
+    if(stateHasContent(remoteState)) return false;
+    if(String(updatedBy||'')==='manual_reset') return false;
+    return Number(remoteRevision||0)>1;
   }
 
   // 未同期状態は現在タブのメモリだけに保持する。
@@ -715,7 +728,12 @@
       'Empty payload':'POSTデータ空',
       'save_unconfirmed':'保存確認できず',
       'timeout':'応答タイムアウト',
-      'network':'通信エラー'
+      'network':'通信エラー',
+      'SUSPICIOUS_EMPTY_REMOTE_BLOCKED':'空のサーバーデータを安全装置で拒否',
+      'SUSPICIOUS_EMPTY_GENERATION_BLOCKED':'空の新世代データを安全装置で拒否',
+      'suspicious_empty_state_blocked':'完全空への保存をサーバーが拒否',
+      'CANONICAL_FILE_UNAVAILABLE':'正本ファイル一時アクセス失敗',
+      'STATE_FILE_EMPTY':'正本JSON空データ検知'
     };
     for(const [key,label] of Object.entries(map)) if(c.includes(key)) return label+' ('+c+')';
     return c;
@@ -773,7 +791,15 @@
     pendingSave=null; isDirty=false; dirtyKind='user'; clearPendingLocal();
     const res=await jsonp({action:'load',clientId,since:-1,generation:'',verify:'1'},REQUEST_TIMEOUT_MS);
     if(!res || !res.ok) throw new Error('generation_reload_failed');
-    adoptRemoteState(res.state||defaultState(),res.revision,res.generationId);
+    const incoming=normalizeState(res.state||defaultState());
+    const previous=localSnapshot || state;
+    if(stateHasContent(previous) && !stateHasContent(incoming) && String(res.updatedBy||'')!=='manual_reset'){
+      remoteReady=false;
+      document.body.classList.add('sync-locked');
+      setSyncStatus('error','空データ検知・保護中');
+      throw new Error('SUSPICIOUS_EMPTY_GENERATION_BLOCKED');
+    }
+    adoptRemoteState(incoming,res.revision,res.generationId);
     setSyncStatus('ok','同期済み');
     toast('サーバーが初期化・更新されたため、端末の古い状態は破棄しました。');
     scheduleDrawingMaintenanceIfNeeded();
@@ -904,13 +930,16 @@
       }
 
       const remoteState=normalizeState(res.state||defaultState());
+      if(suspiciousEmptyRemote(remoteState,remoteRevision,res.updatedBy)){
+        throw new Error('SUSPICIOUS_EMPTY_REMOTE_BLOCKED');
+      }
       if(initial){
         // 初回起動は必ずサーバー状態をそのまま採用する。ブラウザキャッシュとのマージは禁止。
         adoptRemoteState(remoteState,remoteRevision,remoteGeneration);
         setSyncStatus('ok','同期済み');
         scheduleDrawingMaintenanceIfNeeded();
       }else if(remoteGeneration!==generationId){
-        await handleGenerationMismatch(null,'poll_generation_changed');
+        await handleGenerationMismatch(cloneState(state),'poll_generation_changed');
       }else if(remoteRevision>revision){
         adoptRemoteState(remoteState,remoteRevision,remoteGeneration);
         setSyncStatus('ok','同期済み');
