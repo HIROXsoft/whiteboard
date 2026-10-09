@@ -164,6 +164,18 @@
     .btn{padding:7px 8px}
   }
 
+  body.read-only .eraser-mode-mark,
+  body.read-only #undoBtn,
+  body.read-only #clearDrawingBtn,
+  body.read-only .tray,
+  body.read-only .tiny{display:none!important}
+  body.read-only .layout{display:block;min-height:0;width:100%}
+  body.read-only .board-wrap{width:100%;height:100%}
+  body.read-only .drawing-canvas{pointer-events:none!important;cursor:default!important}
+  body.read-only .floating-chip{pointer-events:none!important;cursor:default!important}
+  body.read-only .board-title{cursor:default;pointer-events:none!important}
+  body.read-only .mobile-view-badge{display:inline-flex}
+
   body.sync-locked .tray,
   body.sync-locked .drawing-canvas,
   body.sync-locked .floating-chip,
@@ -250,10 +262,15 @@
   'use strict';
 
   /* GASをウェブアプリとしてデプロイ後、発行URLに置き換えてください。 */
-  const GAS_URL = 'https://script.google.com/macros/s/AKfycbxYU5saaeCR0KeunRteI6oP3DsQ_pmIMmEAAFZ9XlP4FGzvJ0-SxxN7PI1BFS3Ei1rNHg/exec';
+  const GAS_URL = 'https://script.google.com/macros/s/AKfycbwCJ0CDPHA6dRwtW-QDpU2X1EkyogL-6y-3u-33jpo_ZNIxgUfgXrRwImleOnnlKo_E-A/exec';
   const API_TOKEN = 'hirox';
   const ROW_COUNT = 16;
   const CACHE_KEY = 'hirox_schedule_board_cache_v9_disabled';
+  const FAST_VIEW_CACHE_KEY = 'hirox_schedule_board_fast_view_v10';
+  // この値だけを editor / viewer 版で切り替えます。
+  const DEVICE_ROLE = 'viewer';
+  const EDITOR_MODE = DEVICE_ROLE === 'editor';
+  const READ_ONLY = !EDITOR_MODE;
   const PENDING_KEY = 'hirox_schedule_board_pending_v9_disabled';
   const LEGACY_PENDING_KEY = 'hirox_schedule_board_pending_v1';
   const LEGACY_PENDING_BACKUP_KEY = 'hirox_schedule_board_pending_v1_quarantine';
@@ -264,8 +281,9 @@
   const DRAWING_BASE_MAX_CHARS = 520000;
   const DRAWING_BASE_MAX_DIMENSION = 1500;
   const DRAWING_PAYLOAD_SOFT_LIMIT = 700000;
-  const POLL_INTERVAL_MS = 2000;
-  const DRIVE_VERIFY_EVERY_POLLS = 8;
+  const POLL_INTERVAL_MS = EDITOR_MODE ? 3000 : 5000;
+  // Drive直読みによる検証は5分に1回。通常確認はScript Cacheを使う。
+  const DRIVE_VERIFY_INTERVAL_MS = 5 * 60 * 1000;
   const SAVE_DEBOUNCE_MS = 350;
   const REQUEST_TIMEOUT_MS = 20000;
   const ACK_POLL_MS = 650;
@@ -293,6 +311,12 @@
   const eraserCursor = $('#eraserCursor');
   const eraserModeMark = $('#eraserModeMark');
 
+  const VIEW_ONLY = READ_ONLY || MOBILE_VIEW_ONLY;
+  if(READ_ONLY){
+    document.body.classList.add('read-only');
+    if($('#mobileViewBadge')) $('#mobileViewBadge').textContent='閲覧専用';
+  }
+
   if(MOBILE_VIEW_ONLY){
     document.body.classList.add('mobile-view-only');
     document.documentElement.classList.add('mobile-view-only');
@@ -300,10 +324,10 @@
 
   quarantineLegacyPending();
   document.body.classList.add('sync-locked');
-  const cachedFallback = null;
-  let state = defaultState();
-  let revision = 0;
-  let generationId = '';
+  const cachedFallback = loadCachedSnapshot();
+  let state = cachedFallback ? normalizeState(cachedFallback.state) : defaultState();
+  let revision = cachedFallback ? Number(cachedFallback.revision||0) : 0;
+  let generationId = cachedFallback ? String(cachedFallback.generationId||'') : '';
   let remoteReady = false;
   let drawingMode = 'pen';
   let drag = null;
@@ -312,6 +336,7 @@
   let pollTimer = null;
   let maintenanceTimer = null;
   let pollCount = 0;
+  let lastDriveVerifyAt = Date.now();
   let isDirty = false;
   let dirtyKind = 'user';
   let saveInFlight = false;
@@ -357,15 +382,31 @@
       for(let i=0;i<localStorage.length;i++){
         const key=localStorage.key(i);
         if(!key) continue;
-        if(key==='hirox_schedule_board_client_id') continue;
+        if(key==='hirox_schedule_board_client_id' || key===FAST_VIEW_CACHE_KEY) continue;
         if(key.startsWith('hirox_schedule_board_')) removeKeys.push(key);
       }
       removeKeys.forEach(key=>localStorage.removeItem(key));
     }catch(e){ console.warn('旧同期キャッシュの削除に失敗しました。',e); }
   }
 
-  function loadCachedSnapshot(){ return null; }
-  function cacheState(){ /* 永続キャッシュへ状態を書かない */ }
+  function loadCachedSnapshot(){
+    try{
+      const raw=localStorage.getItem(FAST_VIEW_CACHE_KEY);
+      if(!raw) return null;
+      const parsed=JSON.parse(raw);
+      if(!parsed || !parsed.state || !parsed.generationId) return null;
+      return parsed;
+    }catch(e){ return null; }
+  }
+  function cacheSyncedSnapshot(remoteState, remoteRevision, remoteGeneration, updatedAt=''){
+    try{
+      localStorage.setItem(FAST_VIEW_CACHE_KEY,JSON.stringify({
+        state:compactStateFrom(remoteState), revision:Number(remoteRevision||0),
+        generationId:String(remoteGeneration||''), updatedAt:String(updatedAt||''), cachedAt:Date.now()
+      }));
+    }catch(e){ console.warn('高速表示キャッシュ保存失敗',e); }
+  }
+  function cacheState(){ /* 未同期の編集内容は永続保存しない */ }
   function quarantineLegacyPending(){ purgePersistentSyncStorage(); }
   function clearLegacySharedCaches(){ purgePersistentSyncStorage(); }
 
@@ -502,7 +543,7 @@
   }
 
   function markChanged(delayMs = SAVE_DEBOUNCE_MS, kind='user'){
-    if(MOBILE_VIEW_ONLY) return;
+    if(VIEW_ONLY) return;
     if(!remoteReady){
       setSyncStatus('loading','サーバー確認待ち');
       return;
@@ -782,6 +823,7 @@
     generationId=String(remoteGeneration||'');
     remoteReady=true; isDirty=false; dirtyKind='user'; pendingSave=null; saveRetryCount=0;
     lastSyncedState=cloneState(state); lastSavedPayload=stablePayload();
+    cacheSyncedSnapshot(state,revision,generationId);
     document.body.classList.remove('sync-locked');
     clearPendingLocal(); cacheState(); render();
   }
@@ -844,7 +886,7 @@
   }
 
   async function saveRemote(){
-    if(MOBILE_VIEW_ONLY || !remoteReady || saveInFlight || !isDirty) return;
+    if(VIEW_ONLY || !remoteReady || saveInFlight || !isDirty) return;
     if(!isGasConfigured()){ setSyncStatus('error','GAS URL未設定'); return; }
     if(!generationId){ setSyncStatus('loading','サーバー世代確認中'); return; }
 
@@ -888,6 +930,7 @@
           isDirty=stablePayload()!==lastSavedPayload;
           if(!isDirty) dirtyKind='user';
           cacheState();
+          if(!isDirty) cacheSyncedSnapshot(state,revision,generationId);
           if(isDirty && dirtyKind==='user') writePendingLocal(); else if(!isDirty) clearPendingLocal();
           setSyncStatus(isDirty?'saving':'ok',isDirty?'未同期・自動保存':'同期済み');
           if(!isDirty) scheduleDrawingMaintenanceIfNeeded();
@@ -909,7 +952,7 @@
     }
   }
 
-  async function loadRemote({initial=false,forceVerify=false}={}){
+  async function loadRemote({initial=false,forceVerify=false,fast=true}={}){
     if(loadInFlight || saveInFlight || drag || activeStroke || (isDirty && remoteReady)) return;
     if(!isGasConfigured()){ setSyncStatus('error','GAS URL未設定'); return; }
     loadInFlight=true;
@@ -917,7 +960,7 @@
     try{
       const verify=initial||forceVerify;
       const res=await jsonp({
-        action:'load',clientId,since:initial?-1:revision,generation:generationId,verify:verify?'1':'0'
+        action:'load',clientId,since:initial?-1:revision,generation:generationId,verify:verify?'1':'0',fast:fast?'1':'0'
       },REQUEST_TIMEOUT_MS);
       if(!res || !res.ok) throw new Error(res&&res.error?res.error:'load_failed');
       const remoteRevision=Number(res.revision||0);
@@ -949,7 +992,7 @@
       }
 
       requestAnimationFrame(()=>{
-        if(!MOBILE_VIEW_ONLY && migrateMagnetsToCenterRatioOnce()){
+        if(!VIEW_ONLY && migrateMagnetsToCenterRatioOnce()){
           renderFloating(); cacheState();
           // 座標変換は表示互換のためだけで、古いキャッシュをサーバーへ勝手に復活させない。
         }
@@ -957,10 +1000,11 @@
     }catch(e){
       console.error('読み込みエラー',e);
       if(initial){
-        // サーバーを確認できない時は古いキャッシュを表示せず、編集も許可しない。
-        state=defaultState(); generationId=''; revision=0; isDirty=false; pendingSave=null;
+        // 高速表示キャッシュがあれば画面は維持する。ただし編集はサーバー確認完了までロックする。
+        if(!cachedFallback){ state=defaultState(); generationId=''; revision=0; }
+        isDirty=false; pendingSave=null;
         remoteReady=false; document.body.classList.add('sync-locked'); render();
-        setSyncStatus('error','サーバー接続待ち');
+        setSyncStatus('error',cachedFallback?'表示保持・再接続待ち':'サーバー接続待ち');
       }else setSyncStatus('error','再接続待ち');
     }finally{ loadInFlight=false; }
   }
@@ -1168,7 +1212,7 @@
   }
 
   function scheduleDrawingMaintenanceIfNeeded(){
-    if(MOBILE_VIEW_ONLY) return;
+    if(VIEW_ONLY) return;
     clearTimeout(maintenanceTimer);
     if(!needsDrawingMaintenance()) return;
     maintenanceTimer=setTimeout(()=>{
@@ -1253,7 +1297,7 @@
   }
 
   function toggleDrawingMode(){
-    if(MOBILE_VIEW_ONLY) return;
+    if(VIEW_ONLY) return;
     drawingMode=drawingMode==='pen'?'erase':'pen';
     updateModeUi(true);
   }
@@ -1324,7 +1368,7 @@
 
   drawingCanvas.addEventListener('contextmenu',e=>e.preventDefault());
   drawingCanvas.addEventListener('pointerdown',e=>{
-    if(MOBILE_VIEW_ONLY) return;
+    if(VIEW_ONLY) return;
     if(drag || activeStroke || !e.isPrimary) return;
     if(e.pointerType==='mouse' && e.button!==0 && e.button!==5) return;
     e.preventDefault();
@@ -1335,7 +1379,7 @@
   },{passive:false});
 
   drawingCanvas.addEventListener('pointermove',e=>{
-    if(MOBILE_VIEW_ONLY) return;
+    if(VIEW_ONLY) return;
     if(!e.isPrimary) return;
     if(activeStroke && activeStroke.pointerId===e.pointerId){
       appendStrokePoint(e);
@@ -1385,7 +1429,7 @@
   });
 
   function attachTrayDrag(el){
-    if(MOBILE_VIEW_ONLY) return;
+    if(VIEW_ONLY) return;
     el.onpointerdown = e => {
       e.preventDefault();
       e.stopPropagation();
@@ -1399,7 +1443,7 @@
   }
 
   function attachPlacedDrag(el){
-    if(MOBILE_VIEW_ONLY) return;
+    if(VIEW_ONLY) return;
     el.onpointerdown = e => {
       e.preventDefault();
       e.stopPropagation();
@@ -1457,14 +1501,14 @@
   }
 
   document.addEventListener('pointermove',e=>{
-    if(MOBILE_VIEW_ONLY || !drag) return;
+    if(VIEW_ONLY || !drag) return;
     drag.lastX=e.clientX; drag.lastY=e.clientY;
     moveGhost(e.clientX,e.clientY);
     drag.lastBoardPos=pointInBoard(e.clientX,e.clientY)?boardPoint(e.clientX,e.clientY):null;
   },{passive:false});
 
   document.addEventListener('pointerup',e=>{
-    if(MOBILE_VIEW_ONLY || !drag) return;
+    if(VIEW_ONLY || !drag) return;
     const currentDrag=drag;
     const dropX=Number.isFinite(e.clientX)?e.clientX:drag.lastX;
     const dropY=Number.isFinite(e.clientY)?e.clientY:drag.lastY;
@@ -1503,7 +1547,7 @@
   }
 
   $('#undoBtn').onclick=()=>{
-    if(MOBILE_VIEW_ONLY) return;
+    if(VIEW_ONLY) return;
     if(day().strokes.length){day().strokes.pop();markChanged();redrawDrawingFromState();toast('1つ前の手書きを戻しました');}
     else toast('戻せる手書きがありません');
   };
@@ -1518,20 +1562,20 @@
   }
 
   $('#clearDrawingBtn').onclick=()=>{
-    if(MOBILE_VIEW_ONLY) return;
+    if(VIEW_ONLY) return;
     if(confirm('手書きした内容をすべて消去しますか？\nマグネットの配置と氏名一覧は残ります。')){
       clearDrawingCanvas(); toast('手書き分をすべて消去しました');
     }
   };
 
   $('#resetPeopleBtn').onclick=()=>{
-    if(MOBILE_VIEW_ONLY) return;
+    if(VIEW_ONLY) return;
     day().magnets=day().magnets.filter(m=>m.kind!=='person');
     markChanged(); render();
   };
 
   $('#addPersonBtn').onclick=()=>{
-    if(MOBILE_VIEW_ONLY) return;
+    if(VIEW_ONLY) return;
     modal.classList.add('show'); $('#personName').value='';
     setTimeout(()=>$('#personName').focus(),50);
   };
@@ -1595,20 +1639,20 @@
     boardResizeObserver.observe(boardSurface);
   }
   document.addEventListener('visibilitychange',()=>{
-    if(document.visibilityState==='visible') loadRemote({forceVerify:true});
+    if(document.visibilityState==='visible') loadRemote({forceVerify:false,fast:true});
   });
   window.addEventListener('beforeunload',()=>{
     if(isDirty) saveRemote();
   });
   document.addEventListener('dblclick',e=>{
-    if(MOBILE_VIEW_ONLY) return;
+    if(VIEW_ONLY) return;
     const chip=e.target.closest('.floating-chip');
     if(!chip) return;
     day().magnets=day().magnets.filter(m=>m.id!==chip.dataset.magnetId);
     markChanged(); render();
   });
 
-  syncBadge.title='クリックすると再同期／同期診断を行います';
+  syncBadge.title=VIEW_ONLY?'クリックすると最新状態を再確認します':'クリックすると再同期／同期診断を行います';
   syncBadge.style.cursor='pointer';
   syncBadge.onclick=async()=>{
     if(isDirty){
@@ -1638,7 +1682,7 @@
       loadRemote({initial:true});
     }
   };
-  if(MOBILE_VIEW_ONLY){
+  if(VIEW_ONLY){
     drawingMode='pen';
     modeToggle.removeAttribute('tabindex');
     modeToggle.setAttribute('aria-disabled','true');
@@ -1651,11 +1695,15 @@
   clearLegacySharedCaches();
   updateModeUi(false);
   render();
-  setSyncStatus('loading', MOBILE_VIEW_ONLY ? '● 接続中' : 'サーバー正本確認中');
-  setTimeout(()=>loadRemote({initial:true,forceVerify:true}), 50);
+  setSyncStatus('loading', cachedFallback ? 'キャッシュ表示・更新確認中' : (VIEW_ONLY ? '● 接続中' : 'サーバー確認中'));
+  // 初回は Script Cache 優先。Cache が無い場合のみ GAS 側が Drive にフォールバックする。
+  setTimeout(()=>loadRemote({initial:true,forceVerify:false,fast:true}), 20);
   pollTimer=setInterval(()=>{
     pollCount++;
-    loadRemote({forceVerify:(pollCount % DRIVE_VERIFY_EVERY_POLLS)===0});
+    const now=Date.now();
+    const forceVerify=(now-lastDriveVerifyAt)>=DRIVE_VERIFY_INTERVAL_MS;
+    if(forceVerify) lastDriveVerifyAt=now;
+    loadRemote({forceVerify,fast:!forceVerify});
   },POLL_INTERVAL_MS);
 })();
 </script>
