@@ -103,10 +103,18 @@
   .dialog-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
   .toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:#132f4c;color:#fff;padding:10px 16px;border-radius:999px;box-shadow:var(--shadow);z-index:200;opacity:0;pointer-events:none;transition:.2s}
   .toast.show{opacity:1}
-  .sync-badge{display:inline-flex;align-items:center;justify-content:center;min-width:84px;min-height:36px;padding:6px 10px;border-radius:999px;font-size:13px;font-weight:900;white-space:nowrap;border:1px solid #b6c2c8;background:#f3f6f8;color:#33434c}
-  .sync-badge.ok{background:#e8f7ec;color:#176b32;border-color:#9dd4aa}
-  .sync-badge.saving,.sync-badge.loading{background:#fff7d6;color:#765b00;border-color:#ddc86b}
-  .sync-badge.error{background:#fff0f0;color:#a11d1d;border-color:#e2aaaa}
+  .sync-badge{position:static;flex:0 0 auto;width:31px;height:25px;min-width:31px;min-height:25px;padding:3px 3px 2px;border:1px solid #c7d2d9;border-radius:8px;background:#f7fafc;box-shadow:none;display:flex;align-items:flex-end;justify-content:center;gap:3px;opacity:.82;cursor:default}
+  .sync-badge::before,.sync-badge::after,.sync-badge span{content:"";display:block;width:5px;border-radius:2px 2px 0 0;background:#26343c}
+  .sync-badge::before{height:7px}
+  .sync-badge span{height:12px}
+  .sync-badge::after{height:17px}
+  .sync-badge.signal-1 span,.sync-badge.signal-1::after{opacity:.16}
+  .sync-badge.signal-2::after{opacity:.16}
+  .sync-badge.signal-3::before,.sync-badge.signal-3 span,.sync-badge.signal-3::after{opacity:1}
+  .sync-badge.signal-1{opacity:.62}
+  .sync-badge.signal-2{opacity:.72}
+  .sync-badge.signal-3{opacity:.88}
+  .sync-badge:hover{opacity:1}
   .board-surface .drawing-canvas{cursor:crosshair}
   .board-surface.erase-mode{outline:4px solid rgba(224,108,0,.62);outline-offset:-4px}
   .board-surface.erase-mode .drawing-canvas{cursor:none}
@@ -127,7 +135,6 @@
   body.mobile-view-only .brand-logo{width:110px;max-height:32px}
   body.mobile-view-only .tool-group{width:100%;display:flex;justify-content:flex-end;gap:5px;flex-wrap:nowrap}
   body.mobile-view-only .mobile-view-badge{margin-right:auto;min-height:34px;padding:5px 9px;font-size:12px}
-  body.mobile-view-only .sync-badge{min-width:64px;min-height:34px;padding:5px 7px;font-size:11px}
   body.mobile-view-only #hjpViewBtn{min-height:34px;padding:3px 6px;border-radius:8px;min-width:96px}
   body.mobile-view-only #hjpViewBtn img{width:86px;max-height:25px}
   body.mobile-view-only #fullBtn{min-height:34px;padding:5px 8px;font-size:0;border-radius:8px}
@@ -147,7 +154,6 @@
     body.mobile-view-only #app{padding:3px}
     body.mobile-view-only .topbar{min-height:42px;padding:3px 6px}
     body.mobile-view-only .mobile-view-badge,
-    body.mobile-view-only .sync-badge{min-height:30px}
     body.mobile-view-only #fullBtn{min-height:30px}
     body.mobile-view-only .board{min-width:900px}
     body.mobile-view-only .board-title .main{font-size:22px}
@@ -159,7 +165,6 @@
     .topbar{align-items:center;gap:6px}
     .eraser-mode-mark{width:112px;height:48px;margin-left:8px;font-size:14px}
     .tool-group{gap:4px}
-    .sync-badge{min-width:70px;padding:5px 7px;font-size:12px}
     .tool-group{gap:4px}
     .btn{padding:7px 8px}
   }
@@ -198,7 +203,7 @@
     <div class="tool-group" aria-label="操作メニュー">
       <button class="btn" id="undoBtn" title="1つ前の手書きを戻す" aria-label="戻す">↶ 戻す</button>
       <button class="btn danger" id="clearDrawingBtn" title="手書きをすべて消去" aria-label="手書きを全消去">🗑 全消去</button>
-      <span id="syncBadge" class="sync-badge" title="接続状況。タップで再接続">● 接続</span>
+      <span id="syncBadge" class="sync-badge signal-2" title="通信状態：遅い" aria-label="通信状態：遅い"><span></span></span>
       <button class="btn remote-view-btn" id="hjpViewBtn" type="button" title="HJP版の状況を別ウィンドウで確認" aria-label="HJP版の状況を開く"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyODEgNTgiIHdpZHRoPSIyODEiIGhlaWdodD0iNTgiIHJvbGU9ImltZyIgYXJpYS1sYWJlbD0iSElST1ggSkFQQU4iPgogIDx0aXRsZT5ISVJPWCBKQVBBTjwvdGl0bGU+CiAgPGcgYXJpYS1sYWJlbD0iSElST1giPgogICAgPHBhdGggZmlsbD0iIzAwMDA4MCIgc3Ryb2tlPSIjMDAwMDgwIiBzdHJva2Utd2lkdGg9IjAuOTkyMSIKICAgIGQ9Ik0zLjMwMiwzMi43NTJjMCwxLjUwNCwwLjU5NywyLjk0NSwxLjY2MSw0LjAwOWMxLjA2MywxLjA2MywyLjUwNSwxLjY2LDQuMDA5LDEuNjZjMS41MDMsMCwyLjk0NS0wLjU5OCw0LjAwOS0xLjY2CiAgICBjMS4wNjMtMS4wNjMsMS42Ni0yLjUwNSwxLjY2LTQuMDA5di01LjY2OWgzNC4wMTZ2NS42NjljMCwxLjUwNCwwLjU5OCwyLjk0NSwxLjY2MSw0LjAwOWMxLjA2MywxLjA2MywyLjUwNSwxLjY2LDQuMDA5LDEuNjYKICAgIGMxLjUwMywwLDIuOTQ1LTAuNTk4LDQuMDA5LTEuNjZjMS4wNjMtMS4wNjMsMS42Ni0yLjUwNSwxLjY2LTQuMDA5VjEwLjA3NGMwLTEuNTAzLTAuNTk4LTIuOTQ1LTEuNjYtNC4wMDkKICAgIGMtMS4wNjMtMS4wNjMtMi41MDYtMS42Ni00LjAwOS0xLjY2Yy0xLjUwNCwwLTIuOTQ2LDAuNTk3LTQuMDA5LDEuNjZjLTEuMDYzLDEuMDYzLTEuNjYxLDIuNTA1LTEuNjYxLDQuMDA5djUuNjY5SDE0LjY0MXYtNS42NjkKICAgIGMwLTEuNTAzLTAuNTk3LTIuOTQ1LTEuNjYtNC4wMDljLTEuMDYzLTEuMDYzLTIuNTA1LTEuNjYtNC4wMDktMS42NmMtMS41MDQsMC0yLjk0NiwwLjU5Ny00LjAwOSwxLjY2CiAgICBjLTEuMDYzLDEuMDYzLTEuNjYxLDIuNTA1LTEuNjYxLDQuMDA5VjMyLjc1MiIvPgo8cGF0aCBmaWxsPSIjMDAwMDgwIiBzdHJva2U9IiMwMDAwODAiCiAgICBkPSJNNjUuNjY0LDE3Ljc4NXYxNC45NjdjMCwxLjUwNCwwLjU5OCwyLjk0NSwxLjY2MSw0LjAwOWMxLjA2MywxLjA2MywyLjUwNSwxLjY2LDQuMDA5LDEuNjYKICAgIGMxLjUwMywwLDIuOTQ1LTAuNTk4LDQuMDA5LTEuNjZjMS4wNjMtMS4wNjMsMS42Ni0yLjUwNSwxLjY2LTQuMDA5VjE3Ljc4NUg2NS42NjQiLz4KPHBhdGggZmlsbD0iIzAwMDA4MCIgc3Ryb2tlPSIjMDAwMDgwIiBzdHJva2Utd2lkdGg9IjAuOTkyMSIKICAgIGQ9Ik02NC41MywxMC4wNzRjMCwxLjM4MiwwLjcxNywyLjcwOCwxLjk5MywzLjY4NWMxLjI3NSwwLjk3OCwzLjAwNiwxLjUyNiw0LjgxMSwxLjUyNgogICAgYzEuODA0LDAsMy41MzQtMC41NDksNC44MTEtMS41MjZjMS4yNzUtMC45NzcsMS45OTItMi4zMDMsMS45OTItMy42ODVjMC0xLjM4Mi0wLjcxNy0yLjcwOC0xLjk5Mi0zLjY4NQogICAgYy0xLjI3Ni0wLjk3OC0zLjAwNy0xLjUyNi00LjgxMS0xLjUyNmMtMS44MDUsMC0zLjUzNSwwLjU0OS00LjgxMSwxLjUyNkM2NS4yNDcsNy4zNjcsNjQuNTMsOC42OTIsNjQuNTMsMTAuMDc0Ii8+CjxsaW5lIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzAwMDA4MCIgc3Ryb2tlLXdpZHRoPSIwLjk5MjEiIHgxPSIxMDAuNjkiIHkxPSIzMy4zNTYiIHgyPSIxNDYuODk1IiB5Mj0iNTQuOTAyIi8+CjxwYXRoIGZpbGw9IiMwMDAwODAiIHN0cm9rZT0iIzAwMDA4MCIgc3Ryb2tlLXdpZHRoPSIwLjk5MjEiCiAgICBkPSJNMTQ2Ljg5NSw1NC45MDJjMS4zNjEsMC42MzIsMi45MTksMC42OTcsNC4zMjksMC4xODNjMS40MTEtMC41MTQsMi41Ni0xLjU2NiwzLjE5NS0yLjkyNwogICAgYzAuNjM1LTEuMzYsMC43MDQtMi45MTgsMC4xOTMtNC4zMjlzLTEuNTYyLTIuNTYzLTIuOTIxLTMuMjAxbC0yNy45LTEzLjAxaDYuNTAzYzMuMTgzLTAuNTg0LDYuMDYxLTIuMjY1LDguMTMyLTQuNzUxCiAgICBzMy4yMDYtNS42MiwzLjIwNi04Ljg1NmMwLTMuMjM2LTEuMTM0LTYuMzctMy4yMDYtOC44NTVzLTQuOTQ5LTQuMTY3LTguMTMyLTQuNzVIODguMzQyYy0xLjUwNCwwLTIuOTQ2LDAuNTk3LTQuMDA5LDEuNjYKICAgIGMtMS4wNjMsMS4wNjMtMS42NjEsMi41MDUtMS42NjEsNC4wMDl2MjIuNjc4YzAsMS41MDQsMC41OTcsMi45NDUsMS42NjEsNC4wMDljMS4wNjMsMS4wNjMsMi41MDUsMS42Niw0LjAwOSwxLjY2CiAgICBjMS41MDMsMCwyLjk0NS0wLjU5OCw0LjAwOS0xLjY2YzEuMDYzLTEuMDYzLDEuNjYtMi41MDUsMS42Ni00LjAwOVYxMy40NzZoMzEuNzQ4YzEuMjAzLDAsMi4zNTYsMC40NzgsMy4yMDcsMS4zMjgKICAgIHMxLjMyOSwyLjAwNCwxLjMyOSwzLjIwN2MwLDEuMjAzLTAuNDc4LDIuMzU2LTEuMzI5LDMuMjA3cy0yLjAwNCwxLjMyOS0zLjIwNywxLjMyOWgtMjIuNjc3Yy0xLjI5MSwwLTIuNTQzLDAuNDQtMy41NDksMS4yNDkKICAgIGMtMS4wMDYsMC44MDktMS43MDcsMS45MzYtMS45ODYsMy4xOTZzLTAuMTE5LDIuNTc5LDAuNDUzLDMuNzM2czEuNTIxLDIuMDg0LDIuNjkxLDIuNjI5Ii8+CjxwYXRoIGZpbGw9IiMwMDAwODAiIHN0cm9rZT0iIzAwMDA4MCIgc3Ryb2tlLXdpZHRoPSIwLjk5MjEiCiAgICBkPSJNMTQ0Ljc1MSwyMS40MTNjMC00LjQ2MSwzLjM0NS04Ljc0LDkuMjk5LTExLjg5NXMxNC4wMjktNC45MjcsMjIuNDQ5LTQuOTI3czE2LjQ5NSwxLjc3MiwyMi40NDksNC45MjcKICAgIHM5LjI5OSw3LjQzNCw5LjI5OSwxMS44OTVzLTMuMzQ1LDguNzQtOS4yOTksMTEuODk2Yy01Ljk1NCwzLjE1NC0xNC4wMjksNC45MjctMjIuNDQ5LDQuOTI3cy0xNi40OTUtMS43NzItMjIuNDQ5LTQuOTI3CiAgICBDMTQ4LjA5NiwzMC4xNTMsMTQ0Ljc1MSwyNS44NzUsMTQ0Ljc1MSwyMS40MTMgTTE1Ni40NTIsMjEuNDEzYzAsMi42NTgsMi4xMTIsNS4yMDgsNS44NzEsNy4wODcKICAgIGMzLjc2MSwxLjg4LDguODU4LDIuOTM2LDE0LjE3NiwyLjkzNmM1LjMxNiwwLDEwLjQxNi0xLjA1NiwxNC4xNzUtMi45MzZjMy43Ni0xLjg4LDUuODcyLTQuNDI5LDUuODcyLTcuMDg3CiAgICBzLTIuMTEyLTUuMjA4LTUuODcyLTcuMDg3Yy0zLjc1OS0xLjg4LTguODU4LTIuOTM2LTE0LjE3NS0yLjkzNmMtNS4zMTcsMC0xMC40MTUsMS4wNTYtMTQuMTc2LDIuOTM2CiAgICBDMTU4LjU2NCwxNi4yMDUsMTU2LjQ1MiwxOC43NTUsMTU2LjQ1MiwyMS40MTMiLz4KPHBhdGggZmlsbD0iIzAwMDA4MCIgc3Ryb2tlPSIjMDAwMDgwIiBzdHJva2Utd2lkdGg9IjAuOTkyMSIKICAgIGQ9Ik0yNzQuMTQ3LDI3LjQ5M2MxLjM5NiwwLjU2MywyLjUwOSwxLjY1NiwzLjA5OCwzLjA0MWMwLjU4OSwxLjM4MywwLjYwMywyLjk0NCwwLjA0LDQuMzQKICAgIGMtMC41NjMsMS4zOTUtMS42NTUsMi41MDgtMy4wNCwzLjA5OGMtMS4zODQsMC41ODgtMi45NDQsMC42MDMtNC4zMzksMC4wNGwtMjcuMzYyLTEwLjk0M2wtMjcuNDY3LDEwLjk4NwogICAgYy0xLjExOSwwLjQyNC0yLjM0NSwwLjQ4NC0zLjUsMC4xN2MtMS4xNTYtMC4zMTQtMi4xODMtMC45ODctMi45MzMtMS45MjJjLTAuNzUxLTAuOTM0LTEuMTg2LTIuMDgtMS4yNDMtMy4yNzYKICAgIHMwLjI2NC0yLjM4MSwwLjkyMS0zLjM4M2MwLjY1Ni0xLjAwMSwxLjYxMi0xLjc3LDIuNzMyLTIuMTk1bDE2LjIyNi02LjQ4OWwtMTQuMTA0LTUuNjQxYy0xLjM4Mi0wLjU2OS0yLjQ4NC0xLjY2LTMuMDY1LTMuMDM2CiAgICBjLTAuNTgyLTEuMzc2LTAuNTk3LTIuOTI2LTAuMDQyLTQuMzEzczEuNjM1LTIuNSwzLjAwNS0zLjA5NXMyLjkyMS0wLjYyNiw0LjMxMy0wLjA4NWwyNS4xNjEsMTAuMDYzTDI2Ny42NTEsNC44MQogICAgYzEuMTEyLTAuNDQ1LDIuMzM3LTAuNTI3LDMuNDk3LTAuMjMzYzEuMTYyLDAuMjk0LDIuMiwwLjk0NywyLjk2NywxLjg2OGMwLjc2NywwLjkyLDEuMjIzLDIuMDYsMS4zMDIsMy4yNTQKICAgIGMwLjA3OSwxLjE5NS0wLjIyMiwyLjM4NS0wLjg2LDMuMzk4Yy0wLjYzOCwxLjAxNC0xLjU4MSwxLjc5OS0yLjY5MywyLjI0M2wtMTQuMDUxLDUuNjJMMjc0LjE0NywyNy40OTMiLz4KICA8L2c+CiAgPGcgYXJpYS1sYWJlbD0iSkFQQU4iPgogICAgPHBhdGggZmlsbD0iIzAwMDA4MCIgZD0iTTIxMC44Nzg5MDYyNSA1NS4zMTI3OTI5Njg3NUMyMTIuNDQ3MjY1NjI1IDU1LjMxMjc5Mjk2ODc1IDIxMy40NDYyODkwNjI1IDU0LjQzMTkzMzU5Mzc1IDIxMy40NDYyODkwNjI1IDUyLjg0NzQ2MDkzNzVWNDcuMTk3MDcwMzEyNUgyMTIuMDIyOTQ5MjE4NzVWNTIuODMxMzQ3NjU2MjVDMjEyLjAyMjk0OTIxODc1IDUzLjY1MzEyNSAyMTEuNTcxNzc3MzQzNzUgNTQuMDk4OTI1NzgxMjUgMjEwLjg2Mjc5Mjk2ODc1IDU0LjA5ODkyNTc4MTI1QzIxMC4xNTkxNzk2ODc1IDU0LjA5ODkyNTc4MTI1IDIwOS43MDgwMDc4MTI1IDUzLjY1MzEyNSAyMDkuNzA4MDA3ODEyNSA1Mi44MzEzNDc2NTYyNVY1Mi4zMjEwOTM3NUgyMDguMzQzNzVWNTIuODI1OTc2NTYyNUMyMDguMzQzNzUgNTQuNDI2NTYyNSAyMDkuMzMyMDMxMjUgNTUuMzEyNzkyOTY4NzUgMjEwLjg3ODkwNjI1IDU1LjMxMjc5Mjk2ODc1WiIvPgo8cGF0aCBmaWxsPSIjMDAwMDgwIiBkPSJNMjE5LjE0OTkwMjM0Mzc1IDU1LjJIMjIwLjY3NTI5Mjk2ODc1TDIyMS4zMzA1NjY0MDYyNSA1My4yODc4OTA2MjVIMjI0LjQzNTA1ODU5Mzc1TDIyNS4wNzQyMTg3NSA1NS4ySDIyNi42MzcyMDcwMzEyNUwyMjMuNzkwNTI3MzQzNzUgNDcuMTk3MDcwMzEyNUgyMjIuMDA3MzI0MjE4NzVaTTIyMS43MjgwMjczNDM3NSA1Mi4xMjIzNjMyODEyNSAyMjIuMTE0NzQ2MDkzNzUgNTAuOTk0NDMzNTkzNzVDMjIyLjM1NjQ0NTMxMjUgNTAuMjU4NTkzNzUgMjIyLjU5ODE0NDUzMTI1IDQ5LjQ5MDUyNzM0Mzc1IDIyMi44OTg5MjU3ODEyNSA0OC40ODA3NjE3MTg3NUMyMjMuMTk5NzA3MDMxMjUgNDkuNDkwNTI3MzQzNzUgMjIzLjQzNjAzNTE1NjI1IDUwLjI1ODU5Mzc1IDIyMy42NzIzNjMyODEyNSA1MC45OTQ0MzM1OTM3NUwyMjQuMDQ4MzM5ODQzNzUgNTIuMTIyMzYzMjgxMjVaIi8+CjxwYXRoIGZpbGw9IiMwMDAwODAiIGQ9Ik0yMzIuMzczMDQ2ODc1IDU1LjJIMjMzLjc5MTAxNTYyNVY1Mi4zMjEwOTM3NUgyMzUuNDAyMzQzNzVDMjM3LjE1ODY5MTQwNjI1IDUyLjMyMTA5Mzc1IDIzOC4yODY2MjEwOTM3NSA1MS4zMjc0NDE0MDYyNSAyMzguMjg2NjIxMDkzNzUgNDkuNzUzNzEwOTM3NUMyMzguMjg2NjIxMDkzNzUgNDguMTg1MzUxNTYyNSAyMzcuMTg1NTQ2ODc1IDQ3LjE5NzA3MDMxMjUgMjM1LjQyOTE5OTIxODc1IDQ3LjE5NzA3MDMxMjVIMjMyLjM3MzA0Njg3NVpNMjMzLjc5MTAxNTYyNSA1MS4xMDcyMjY1NjI1VjQ4LjQxMDkzNzVIMjM1LjM0ODYzMjgxMjVDMjM2LjMwNDY4NzUgNDguNDEwOTM3NSAyMzYuODkwMTM2NzE4NzUgNDguOTIxMTkxNDA2MjUgMjM2Ljg5MDEzNjcxODc1IDQ5Ljc1MzcxMDkzNzVDMjM2Ljg5MDEzNjcxODc1IDUwLjU5MTYwMTU2MjUgMjM2LjMwNDY4NzUgNTEuMTA3MjI2NTYyNSAyMzUuMzQ4NjMyODEyNSA1MS4xMDcyMjY1NjI1WiIvPgo8cGF0aCBmaWxsPSIjMDAwMDgwIiBkPSJNMjQzLjY1MTg1NTQ2ODc1IDU1LjJIMjQ1LjE3NzI0NjA5Mzc1TDI0NS44MzI1MTk1MzEyNSA1My4yODc4OTA2MjVIMjQ4LjkzNzAxMTcxODc1TDI0OS41NzYxNzE4NzUgNTUuMkgyNTEuMTM5MTYwMTU2MjVMMjQ4LjI5MjQ4MDQ2ODc1IDQ3LjE5NzA3MDMxMjVIMjQ2LjUwOTI3NzM0Mzc1Wk0yNDYuMjI5OTgwNDY4NzUgNTIuMTIyMzYzMjgxMjUgMjQ2LjYxNjY5OTIxODc1IDUwLjk5NDQzMzU5Mzc1QzI0Ni44NTgzOTg0Mzc1IDUwLjI1ODU5Mzc1IDI0Ny4xMDAwOTc2NTYyNSA0OS40OTA1MjczNDM3NSAyNDcuNDAwODc4OTA2MjUgNDguNDgwNzYxNzE4NzVDMjQ3LjcwMTY2MDE1NjI1IDQ5LjQ5MDUyNzM0Mzc1IDI0Ny45Mzc5ODgyODEyNSA1MC4yNTg1OTM3NSAyNDguMTc0MzE2NDA2MjUgNTAuOTk0NDMzNTkzNzVMMjQ4LjU1MDI5Mjk2ODc1IDUyLjEyMjM2MzI4MTI1WiIvPgo8cGF0aCBmaWxsPSIjMDAwMDgwIiBkPSJNMjU2Ljg3NSA1NS4ySDI1OC4yOTI5Njg3NVY1MS4xNzcwNTA3ODEyNUMyNTguMjkyOTY4NzUgNTAuODI3OTI5Njg3NSAyNTguMjg3NTk3NjU2MjUgNTAuMTQwNDI5Njg3NSAyNTguMjU1MzcxMDkzNzUgNDkuMjQ4ODI4MTI1QzI1OC43NDQxNDA2MjUgNTAuMTEzNTc0MjE4NzUgMjU5LjE2ODQ1NzAzMTI1IDUwLjgyMjU1ODU5Mzc1IDI1OS4zOTQwNDI5Njg3NSA1MS4xODI0MjE4NzVMMjYxLjkyOTE5OTIxODc1IDU1LjJIMjYzLjQ2NTMzMjAzMTI1VjQ3LjE5NzA3MDMxMjVIMjYyLjA0MTk5MjE4NzVWNTEuNTU4Mzk4NDM3NUMyNjIuMDQxOTkyMTg3NSA1MS44NzUyOTI5Njg3NSAyNjIuMDUyNzM0Mzc1IDUyLjU0MTMwODU5Mzc1IDI2Mi4wNzQyMTg3NSA1My4xNDI4NzEwOTM3NUMyNjEuNzU3MzI0MjE4NzUgNTIuNTczNTM1MTU2MjUgMjYxLjQwMjgzMjAzMTI1IDUxLjk2MTIzMDQ2ODc1IDI2MS4yMTQ4NDM3NSA1MS42NjA0NDkyMTg3NUwyNTguNDA1NzYxNzE4NzUgNDcuMTk3MDcwMzEyNUgyNTYuODc1WiIvPgogIDwvZz4KPC9zdmc+Cg==" alt="HIROX JAPAN"></button>
       <button class="btn primary" id="fullBtn" title="全画面表示" aria-label="全画面表示">⛶ 全画面</button>
     </div>
@@ -281,11 +286,11 @@
   const DRAWING_BASE_MAX_CHARS = 520000;
   const DRAWING_BASE_MAX_DIMENSION = 1500;
   const DRAWING_PAYLOAD_SOFT_LIMIT = 700000;
-  const POLL_INTERVAL_MS = EDITOR_MODE ? 3000 : 5000;
+  const POLL_INTERVAL_MS = EDITOR_MODE ? 3000 : 15000;
   // Drive直読みによる検証は5分に1回。通常確認はScript Cacheを使う。
   const DRIVE_VERIFY_INTERVAL_MS = 5 * 60 * 1000;
   const SAVE_DEBOUNCE_MS = 350;
-  const REQUEST_TIMEOUT_MS = 20000;
+  const REQUEST_TIMEOUT_MS = EDITOR_MODE ? 20000 : 8000;
   const ACK_POLL_MS = 650;
   const SAVE_RETRY_DELAYS = [2000, 4000, 8000, 15000];
   const MOBILE_VIEW_ONLY = (() => {
@@ -497,8 +502,12 @@
 
   function setSyncStatus(type, text){
     if(!syncBadge) return;
-    syncBadge.className = 'sync-badge ' + type;
-    syncBadge.textContent = text;
+    const level = type === 'ok' ? 3 : (type === 'loading' || type === 'saving' ? 2 : 1);
+    syncBadge.className = 'sync-badge signal-' + level;
+    if(!syncBadge.querySelector('span')) syncBadge.innerHTML = '<span></span>';
+    const detail = String(text || '');
+    syncBadge.title = level === 3 ? '通信状態: 良好' : (level === 2 ? '通信状態：遅い' : '通信が不安定です');
+    syncBadge.setAttribute('aria-label', syncBadge.title);
   }
 
   function day(){
@@ -958,9 +967,14 @@
     loadInFlight=true;
     if(initial) setSyncStatus('loading','同期確認中…');
     try{
-      const verify=initial||forceVerify;
+      // Viewer の初回表示では Drive 強制検証を行わない。
+      // ブラウザに前回の正常キャッシュがある場合は、その revision を基準に差分確認だけ行う。
+      // これにより起動直後の Drive 直読み待ちを避ける。
+      const verify=forceVerify;
+      const requestSince=(initial && cachedFallback) ? revision : (initial ? -1 : revision);
+      const requestGeneration=(initial && cachedFallback) ? generationId : generationId;
       const res=await jsonp({
-        action:'load',clientId,since:initial?-1:revision,generation:generationId,verify:verify?'1':'0',fast:fast?'1':'0'
+        action:'load',clientId,since:requestSince,generation:requestGeneration,verify:verify?'1':'0',fast:fast?'1':'0'
       },REQUEST_TIMEOUT_MS);
       if(!res || !res.ok) throw new Error(res&&res.error?res.error:'load_failed');
       const remoteRevision=Number(res.revision||0);
@@ -1001,11 +1015,17 @@
       console.error('読み込みエラー',e);
       if(initial){
         // 高速表示キャッシュがあれば画面は維持する。ただし編集はサーバー確認完了までロックする。
-        if(!cachedFallback){ state=defaultState(); generationId=''; revision=0; }
+        if(!cachedFallback){
+          state=defaultState(); generationId=''; revision=0;
+          document.body.classList.add('sync-locked');
+        }else{
+          // Viewer は前回の正常表示を維持。通信状態は右下の小さな電波マークだけで示す。
+          document.body.classList.remove('sync-locked');
+        }
         isDirty=false; pendingSave=null;
-        remoteReady=false; document.body.classList.add('sync-locked'); render();
-        setSyncStatus('error',cachedFallback?'表示保持・再接続待ち':'サーバー接続待ち');
-      }else setSyncStatus('error','再接続待ち');
+        remoteReady=false; render();
+        setSyncStatus('error',cachedFallback?'前回表示を維持':'初回データ未取得');
+      }else setSyncStatus('error','更新確認失敗・表示維持');
     }finally{ loadInFlight=false; }
   }
 
@@ -1652,9 +1672,10 @@
     markChanged(); render();
   });
 
-  syncBadge.title=VIEW_ONLY?'クリックすると最新状態を再確認します':'クリックすると再同期／同期診断を行います';
-  syncBadge.style.cursor='pointer';
+  syncBadge.title=VIEW_ONLY?'通信状態：遅い':'クリックすると再同期／同期診断を行います';
+  syncBadge.style.cursor=VIEW_ONLY?'default':'pointer';
   syncBadge.onclick=async()=>{
+    if(VIEW_ONLY) return;
     if(isDirty){
       const reqId=pendingSave?.requestId||lastSyncDiagnostic?.requestId||'';
       let diag=lastSyncDiagnostic;
@@ -1696,14 +1717,12 @@
   updateModeUi(false);
   render();
   setSyncStatus('loading', cachedFallback ? 'キャッシュ表示・更新確認中' : (VIEW_ONLY ? '● 接続中' : 'サーバー確認中'));
-  // 初回は Script Cache 優先。Cache が無い場合のみ GAS 側が Drive にフォールバックする。
+  // Viewer は初回も通常更新も Script Cache 優先。
+  // Drive の強制検証は編集端末に任せ、Viewer 自身は行わない。
   setTimeout(()=>loadRemote({initial:true,forceVerify:false,fast:true}), 20);
   pollTimer=setInterval(()=>{
     pollCount++;
-    const now=Date.now();
-    const forceVerify=(now-lastDriveVerifyAt)>=DRIVE_VERIFY_INTERVAL_MS;
-    if(forceVerify) lastDriveVerifyAt=now;
-    loadRemote({forceVerify,fast:!forceVerify});
+    loadRemote({forceVerify:false,fast:true});
   },POLL_INTERVAL_MS);
 })();
 </script>
